@@ -1,0 +1,6 @@
+{
+  "name": "SmartHome AI Platform",
+  "description": "Sekreter AI sesli asistanlı, modern ve ölçeklenebilir akıllı ev yönetim platformu.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
