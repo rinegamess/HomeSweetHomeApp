@@ -18,6 +18,9 @@ interface DashboardViewProps {
   onQuickAction: (actionType: 'all-off' | 'all-on' | 'vacuum-start' | 'eco-mode') => void;
   onVoiceCommandSuccess: () => void;
   onAddNotification: (notif: { title: string; message: string; type: 'info' | 'warning' | 'success' }) => void;
+  weatherCity: string;
+  setWeatherCity: (city: string) => void;
+  activeWeather: { temp: number; humidity: number; windSpeed: number; condition: string };
 }
 
 interface Widget {
@@ -49,7 +52,10 @@ export default function DashboardView({
   onClearNotification,
   onQuickAction,
   onVoiceCommandSuccess,
-  onAddNotification
+  onAddNotification,
+  weatherCity,
+  setWeatherCity,
+  activeWeather
 }: DashboardViewProps) {
   const t = translations[language];
 
@@ -106,45 +112,8 @@ export default function DashboardView({
   });
   const [showVoiceCustomizer, setShowVoiceCustomizer] = useState(false);
 
-  // Weather state (Zonguldak default, dynamically customizable)
-  const [weatherCity, setWeatherCity] = useState(() => {
-    return localStorage.getItem('smarthome_weather_city') || 'Zonguldak';
-  });
+  // Weather input state (Zonguldak default, dynamically customizable)
   const [citySearchInput, setCitySearchInput] = useState('');
-
-  // Generate dynamic but stable weather parameters based on city name hash
-  const getWeatherDataForCity = (city: string) => {
-    let hash = 0;
-    const cleanCity = city.trim();
-    for (let i = 0; i < cleanCity.length; i++) {
-      hash = cleanCity.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const temp = Math.abs(hash % 23) + 12; // 12°C to 35°C
-    const humidity = Math.abs((hash * 7) % 51) + 40; // 40% to 90%
-    const windSpeed = Math.abs((hash * 13) % 21) + 6; // 6 to 26 km/h
-    
-    // determine condition based on hash
-    let conditionTr = 'Güneşli';
-    let conditionEn = 'Sunny';
-    const condId = Math.abs(hash) % 4;
-    if (condId === 1) {
-      conditionTr = 'Parçalı Bulutlu';
-      conditionEn = 'Partly Cloudy';
-    } else if (condId === 2) {
-      conditionTr = 'Hafif Yağmurlu';
-      conditionEn = 'Light Rain';
-    } else if (condId === 3) {
-      conditionTr = 'Rüzgarlı';
-      conditionEn = 'Windy';
-    }
-    
-    return {
-      temp,
-      humidity,
-      windSpeed,
-      condition: language === 'tr' ? conditionTr : conditionEn
-    };
-  };
 
   const handleCityChange = () => {
     if (citySearchInput.trim()) {
@@ -161,8 +130,6 @@ export default function DashboardView({
       });
     }
   };
-
-  const activeWeather = getWeatherDataForCity(weatherCity);
 
   const saveAiVoiceConfig = (newConfig: typeof aiVoiceConfig) => {
     setAiVoiceConfig(newConfig);
@@ -215,51 +182,6 @@ export default function DashboardView({
     }
   };
 
-  // Setup Web Speech Recognition
-  useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      return;
-    }
-
-    const rec = new SpeechRecognition();
-    rec.continuous = false;
-    rec.interimResults = false;
-    rec.lang = language === 'tr' ? 'tr-TR' : 'en-US';
-
-    rec.onstart = () => {
-      setIsListening(true);
-      setMicError(null);
-    };
-
-    rec.onerror = (event: any) => {
-      console.error('Dashboard Speech Error:', event.error);
-      setIsListening(false);
-      if (event.error === 'not-allowed') {
-        setMicError(language === 'tr' ? 'Mikrofon izni reddedildi.' : 'Microphone permission denied.');
-      }
-    };
-
-    rec.onend = () => {
-      setIsListening(false);
-    };
-
-    rec.onresult = async (event: any) => {
-      const resultText = event.results[0][0].transcript.trim();
-      if (resultText) {
-        handleSendVoiceCommand(resultText);
-      }
-    };
-
-    recognitionRef.current = rec;
-
-    return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.abort();
-      }
-    };
-  }, [language, ttsEnabled]);
-
   const toggleMic = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -271,13 +193,49 @@ export default function DashboardView({
 
     if (isListening) {
       recognitionRef.current?.stop();
+      setIsListening(false);
     } else {
       try {
         setMicError(null);
-        recognitionRef.current?.start();
-      } catch (err) {
+        
+        // Stop any speaking speech to avoid interference
+        try { window.speechSynthesis.cancel(); } catch (e) {}
+
+        const rec = new SpeechRecognition();
+        rec.continuous = false;
+        rec.interimResults = false;
+        rec.lang = language === 'tr' ? 'tr-TR' : 'en-US';
+
+        rec.onstart = () => {
+          setIsListening(true);
+        };
+
+        rec.onerror = (event: any) => {
+          console.error('Dashboard Speech Error:', event.error);
+          setIsListening(false);
+          if (event.error === 'not-allowed') {
+            setMicError(language === 'tr' ? 'Mikrofon izni reddedildi.' : 'Microphone permission denied.');
+          } else {
+            setMicError(language === 'tr' ? `Hata: ${event.error}` : `Error: ${event.error}`);
+          }
+        };
+
+        rec.onend = () => {
+          setIsListening(false);
+        };
+
+        rec.onresult = async (event: any) => {
+          const resultText = event.results[0][0].transcript.trim();
+          if (resultText) {
+            handleSendVoiceCommand(resultText);
+          }
+        };
+
+        recognitionRef.current = rec;
+        rec.start();
+      } catch (err: any) {
         console.error('Dashboard mic trigger error:', err);
-        setMicError(language === 'tr' ? 'Mikrofon başlatılamadı.' : 'Could not start microphone.');
+        setMicError(language === 'tr' ? `Mikrofon başlatılamadı: ${err.message || err}` : `Could not start microphone: ${err.message || err}`);
       }
     }
   };

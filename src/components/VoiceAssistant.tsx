@@ -85,105 +85,110 @@ export default function VoiceAssistant({
     }
   };
 
-  // Setup Web Speech Recognition
-  useEffect(() => {
+  // Toggle continuous mic listening / dynamic mobile recognition
+  const toggleMic = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setMicError('Web Speech API is not supported in this browser.');
+      setMicError(language === 'tr'
+        ? 'Bu tarayıcıda ses tanıma desteklenmiyor.'
+        : 'Speech recognition is not supported in this browser.');
       return;
     }
 
-    const rec = new SpeechRecognition();
-    rec.continuous = true;
-    rec.interimResults = false;
-    rec.lang = language === 'tr' ? 'tr-TR' : 'en-US';
-
-    rec.onstart = () => {
-      setIsListening(true);
-      setMicError(null);
-    };
-
-    rec.onerror = (event: any) => {
-      console.error('Speech Recognition Error:', event.error);
-      if (event.error === 'not-allowed') {
-        setMicError(t.micDisabledError);
-        setIsListening(false);
-      }
-    };
-
-    rec.onend = () => {
-      setIsListening(false);
-      setIsWakeWordDetected(false);
-    };
-
-    rec.onresult = async (event: any) => {
-      const lastIndex = event.results.length - 1;
-      const resultText = event.results[lastIndex][0].transcript.trim();
-      
-      // Wake Word check: "sekreter" or "secretary"
-      const lowerText = resultText.toLowerCase();
-      const isWakeWord = lowerText.includes('sekreter') || lowerText.includes('secretary');
-
-      if (!isWakeWordDetected) {
-        if (isWakeWord) {
-          setIsWakeWordDetected(true);
-          const feedback = language === 'tr' ? 'Seni dinliyorum.' : 'I am listening.';
-          
-          // Show user input
-          const cleanInput = resultText;
-          setChatHistory(prev => [...prev, {
-            id: `msg-${Date.now()}`,
-            role: 'user',
-            text: cleanInput,
-            timestamp: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
-          }]);
-
-          speakText(feedback);
-          
-          setChatHistory(prev => [...prev, {
-            id: `msg-feedback-${Date.now()}`,
-            role: 'assistant',
-            text: feedback,
-            timestamp: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
-          }]);
-
-          // Extract the actual command if it came right after wake word
-          // e.g. "Sekreter salon ışığını kapat"
-          const cmdIndex = lowerText.indexOf('sekreter') !== -1 
-            ? lowerText.indexOf('sekreter') + 'sekreter'.length 
-            : lowerText.indexOf('secretary') + 'secretary'.length;
-            
-          const commandSlice = resultText.slice(cmdIndex).trim().replace(/^[,.]/, '').trim();
-          if (commandSlice.length > 2) {
-            handleSendCommand(commandSlice);
-          }
-        }
-      } else {
-        // Already listening, take the command directly
-        setIsWakeWordDetected(false);
-        handleSendCommand(resultText);
-      }
-    };
-
-    recognitionRef.current = rec;
-
-    return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.abort();
-      }
-    };
-  }, [language, isWakeWordDetected, isTtsEnabled]);
-
-  // Toggle continuous mic listening
-  const toggleMic = () => {
     if (isListening) {
       recognitionRef.current?.stop();
+      setIsListening(false);
+      setIsWakeWordDetected(false);
     } else {
       try {
-        recognitionRef.current?.start();
-      } catch (err) {
+        setMicError(null);
+        
+        // Cancel any active speech to avoid feedback
+        try { window.speechSynthesis.cancel(); } catch (e) {}
+
+        const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+
+        const rec = new SpeechRecognition();
+        rec.continuous = !isMobile; // Mobile Safari crashes with continuous: true
+        rec.interimResults = false;
+        rec.lang = language === 'tr' ? 'tr-TR' : 'en-US';
+
+        rec.onstart = () => {
+          setIsListening(true);
+          setMicError(null);
+        };
+
+        rec.onerror = (event: any) => {
+          console.error('VoiceAssistant Speech Error:', event.error);
+          setIsListening(false);
+          setIsWakeWordDetected(false);
+          if (event.error === 'not-allowed') {
+            setMicError(t.micDisabledError);
+          } else {
+            setMicError(language === 'tr' ? `Hata: ${event.error}` : `Error: ${event.error}`);
+          }
+        };
+
+        rec.onend = () => {
+          setIsListening(false);
+          setIsWakeWordDetected(false);
+        };
+
+        rec.onresult = async (event: any) => {
+          const lastIndex = event.results.length - 1;
+          const resultText = event.results[lastIndex][0].transcript.trim();
+          if (!resultText) return;
+
+          if (isMobile) {
+            // Mobile: bypass wake word to send directly
+            handleSendCommand(resultText);
+          } else {
+            // Desktop: wake word flow
+            const lowerText = resultText.toLowerCase();
+            const isWakeWord = lowerText.includes('sekreter') || lowerText.includes('secretary');
+
+            if (!isWakeWordDetected) {
+              if (isWakeWord) {
+                setIsWakeWordDetected(true);
+                const feedback = language === 'tr' ? 'Seni dinliyorum.' : 'I am listening.';
+                
+                setChatHistory(prev => [...prev, {
+                  id: `msg-${Date.now()}`,
+                  role: 'user',
+                  text: resultText,
+                  timestamp: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+                }]);
+
+                speakText(feedback);
+                
+                setChatHistory(prev => [...prev, {
+                  id: `msg-feedback-${Date.now()}`,
+                  role: 'assistant',
+                  text: feedback,
+                  timestamp: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+                }]);
+
+                const cmdIndex = lowerText.indexOf('sekreter') !== -1 
+                  ? lowerText.indexOf('sekreter') + 'sekreter'.length 
+                  : lowerText.indexOf('secretary') + 'secretary'.length;
+                  
+                const commandSlice = resultText.slice(cmdIndex).trim().replace(/^[,.]/, '').trim();
+                if (commandSlice.length > 2) {
+                  handleSendCommand(commandSlice);
+                }
+              }
+            } else {
+              setIsWakeWordDetected(false);
+              handleSendCommand(resultText);
+            }
+          }
+        };
+
+        recognitionRef.current = rec;
+        rec.start();
+      } catch (err: any) {
         console.error('Mic start error:', err);
-        setMicError(t.micDisabledError);
+        setMicError(language === 'tr' ? `Mikrofon başlatılamadı: ${err.message || err}` : `Could not start microphone: ${err.message || err}`);
       }
     }
   };

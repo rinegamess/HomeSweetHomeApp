@@ -65,7 +65,7 @@ export default function Sidebar({
                   Home Sweet Home
                 </h2>
                 <span className="text-[9px] font-semibold font-sans text-indigo-500 dark:text-indigo-400 tracking-wider uppercase">
-                  OS | powered by Recep
+                  powered by Recep
                 </span>
               </div>
             </div>

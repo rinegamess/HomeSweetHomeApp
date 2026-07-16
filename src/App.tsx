@@ -27,7 +27,9 @@ import VoiceAssistant from './components/VoiceAssistant';
 export default function App() {
   // Global View States
   const [language, setLanguage] = useState<Language>('tr');
-  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('dark');
+  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>(() => {
+    return (localStorage.getItem('smarthome_theme') as 'light' | 'dark' | 'system') || 'system';
+  });
   const [activeView, setActiveView] = useState<string>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
@@ -50,13 +52,55 @@ export default function App() {
   });
   const [isLoading, setIsLoading] = useState(true);
 
+  // Weather state (Zonguldak default, dynamically customizable)
+  const [weatherCity, setWeatherCity] = useState(() => {
+    return localStorage.getItem('smarthome_weather_city') || 'Zonguldak';
+  });
+
+  // Generate dynamic but stable weather parameters based on city name hash
+  const getWeatherDataForCity = (city: string) => {
+    let hash = 0;
+    const cleanCity = city.trim();
+    for (let i = 0; i < cleanCity.length; i++) {
+      hash = cleanCity.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const temp = Math.abs(hash % 23) + 12; // 12°C to 35°C
+    const humidity = Math.abs((hash * 7) % 51) + 40; // 40% to 90%
+    const windSpeed = Math.abs((hash * 13) % 21) + 6; // 6 to 26 km/h
+    
+    // determine condition based on hash
+    let conditionTr = 'Güneşli';
+    let conditionEn = 'Sunny';
+    const condId = Math.abs(hash) % 4;
+    if (condId === 1) {
+      conditionTr = 'Parçalı Bulutlu';
+      conditionEn = 'Partly Cloudy';
+    } else if (condId === 2) {
+      conditionTr = 'Hafif Yağmurlu';
+      conditionEn = 'Light Rain';
+    } else if (condId === 3) {
+      conditionTr = 'Rüzgarlı';
+      conditionEn = 'Windy';
+    }
+    
+    return {
+      temp,
+      humidity,
+      windSpeed,
+      condition: language === 'tr' ? conditionTr : conditionEn
+    };
+  };
+
+  const activeWeather = getWeatherDataForCity(weatherCity);
+
   // Persist Rooms on Change
   useEffect(() => {
     localStorage.setItem('smarthome_rooms_list', JSON.stringify(rooms));
   }, [rooms]);
 
-  // Sync Theme Choice immediately to document wrapper
+  // Sync Theme Choice immediately to document wrapper and localStorage
   useEffect(() => {
+    localStorage.setItem('smarthome_theme', theme);
     const root = document.documentElement;
     if (theme === 'dark') {
       root.classList.add('dark');
@@ -669,6 +713,11 @@ export default function App() {
             const element = document.getElementById('alerts');
             element?.scrollIntoView({ behavior: 'smooth' });
           }}
+          weatherCity={weatherCity}
+          weatherCondition={activeWeather.condition}
+          weatherTemp={activeWeather.temp}
+          notifications={notifications}
+          onClearNotification={handleClearNotification}
         />
 
         {/* Inner Content Render */}
@@ -693,6 +742,9 @@ export default function App() {
                   onQuickAction={handleQuickAction}
                   onVoiceCommandSuccess={handleVoiceCommandSuccess}
                   onAddNotification={handleAddNotification}
+                  weatherCity={weatherCity}
+                  setWeatherCity={setWeatherCity}
+                  activeWeather={activeWeather}
                 />
               )}
 
