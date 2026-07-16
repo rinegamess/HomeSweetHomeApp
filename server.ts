@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import { Device, KitchenItem, Automation, NotificationItem, PlatformConnection } from './src/types.js';
@@ -12,8 +13,10 @@ app.use(express.json());
 
 const PORT = 3000;
 
-// Initialize state
-let devices: Device[] = [
+const DATA_FILE = path.join(process.cwd(), 'smarthome_db.json');
+
+// Default arrays to seed or fallback
+const DEFAULT_DEVICES: Device[] = [
   { id: 'dev-1', name: 'Salon Akıllı Ampul', type: 'bulb', room: 'Salon', isOnline: true, isOn: false, energyConsumption: 0.01, lastActive: 'Bugün 20:15', automationEnabled: true, value: 75 },
   { id: 'dev-2', name: 'Mutfak Kahve Makinesi', type: 'socket', room: 'Mutfak', isOnline: true, isOn: false, energyConsumption: 0.85, lastActive: 'Dün 08:30', automationEnabled: false },
   { id: 'dev-3', name: 'Yatak Odası Klima', type: 'air_conditioner', room: 'Yatak Odası', isOnline: true, isOn: true, energyConsumption: 1.2, lastActive: 'Bugün 01:00', automationEnabled: true, value: 22 },
@@ -31,7 +34,7 @@ let devices: Device[] = [
   { id: 'dev-15', name: 'Bahçe Akıllı Projektör', type: 'bulb', room: 'Bahçe', isOnline: true, isOn: false, energyConsumption: 0.18, lastActive: 'Dün 22:00', automationEnabled: true },
 ];
 
-let kitchenItems: KitchenItem[] = [
+const DEFAULT_KITCHEN_ITEMS: KitchenItem[] = [
   { id: 'kt-1', name: 'Yarım Yağlı Süt', category: 'İçecek', isMissing: false, quantity: '2 Adet' },
   { id: 'kt-2', name: 'Köy Yumurtası', category: 'Kahvaltılık', isMissing: false, quantity: '15 Adet' },
   { id: 'kt-3', name: 'Tost Ekmeği', category: 'Kahvaltılık', isMissing: true },
@@ -44,20 +47,20 @@ let kitchenItems: KitchenItem[] = [
   { id: 'kt-10', name: 'Dondurulmuş Pizza', category: 'Dondurulmuş', isMissing: false, quantity: '2 Adet' },
 ];
 
-let automations: Automation[] = [
+const DEFAULT_AUTOMATIONS: Automation[] = [
   { id: 'aut-1', name: 'Gece Tasarruf Modu', active: true, triggerType: 'time', triggerCondition: '23:00', actionDeviceId: 'dev-1', actionType: 'turn_off' },
   { id: 'aut-2', name: 'Sıcaklık Kontrol Klima', active: true, triggerType: 'sensor_temp', triggerCondition: '> 26', actionDeviceId: 'dev-3', actionType: 'turn_on' },
   { id: 'aut-3', name: 'Nem Alıcı Oto Başlat', active: false, triggerType: 'sensor_humidity', triggerCondition: '> 65', actionDeviceId: 'dev-6', actionType: 'set_value', actionValue: 'Yüksek Hız' },
   { id: 'aut-4', name: 'Kapı Açıldığında Giriş Işığı', active: true, triggerType: 'sensor_door', triggerCondition: 'Açık', actionDeviceId: 'dev-4', actionType: 'turn_on' },
 ];
 
-let notifications: NotificationItem[] = [
+const DEFAULT_NOTIFICATIONS: NotificationItem[] = [
   { id: 'nt-1', title: 'Hoş Geldiniz', message: 'SmartHome AI Platformu başarıyla başlatıldı.', type: 'success', timestamp: 'Bugün 02:00', isRead: false },
   { id: 'nt-2', title: 'Eksik Ürün Uyarısı', message: 'Mutfak listenizde Dana Kıyma ve Tost Ekmeği eksik olarak işaretlendi.', type: 'warning', timestamp: 'Bugün 01:30', isRead: false },
   { id: 'nt-3', title: 'Enerji Tasarrufu Önerisi', message: 'Yatak odası kliması son 4 saattir çalışıyor. Sıcaklığı 24 dereceye ayarlamak %10 tasarruf sağlar.', type: 'info', timestamp: 'Dün 22:00', isRead: true },
 ];
 
-let platforms: PlatformConnection[] = [
+const DEFAULT_PLATFORMS: PlatformConnection[] = [
   { id: 'plt-1', name: 'Home Assistant', connected: true, type: 'homeassistant', deviceCount: 8 },
   { id: 'plt-2', name: 'Tuya Smart', connected: true, type: 'tuya', deviceCount: 4 },
   { id: 'plt-3', name: 'Xiaomi Home', connected: false, type: 'xiaomi', deviceCount: 0 },
@@ -67,6 +70,62 @@ let platforms: PlatformConnection[] = [
   { id: 'plt-7', name: 'Shelly REST', connected: true, type: 'shelly', deviceCount: 2 },
   { id: 'plt-8', name: 'MQTT Broker', connected: true, type: 'mqtt', deviceCount: 10 },
 ];
+
+// Initialize live state pointers
+let devices: Device[] = [];
+let kitchenItems: KitchenItem[] = [];
+let automations: Automation[] = [];
+let notifications: NotificationItem[] = [];
+let platforms: PlatformConnection[] = [];
+
+// Unified Persistence Helpers
+function loadState() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      const fileData = fs.readFileSync(DATA_FILE, 'utf8');
+      const parsed = JSON.parse(fileData);
+      devices = parsed.devices || DEFAULT_DEVICES;
+      kitchenItems = parsed.kitchenItems || DEFAULT_KITCHEN_ITEMS;
+      automations = parsed.automations || DEFAULT_AUTOMATIONS;
+      notifications = parsed.notifications || DEFAULT_NOTIFICATIONS;
+      platforms = parsed.platforms || DEFAULT_PLATFORMS;
+      console.log('[Persistence] Loaded smart home state from smarthome_db.json');
+    } else {
+      devices = [...DEFAULT_DEVICES];
+      kitchenItems = [...DEFAULT_KITCHEN_ITEMS];
+      automations = [...DEFAULT_AUTOMATIONS];
+      notifications = [...DEFAULT_NOTIFICATIONS];
+      platforms = [...DEFAULT_PLATFORMS];
+      saveState();
+      console.log('[Persistence] Initialized smarthome_db.json with default seed data');
+    }
+  } catch (err) {
+    console.error('[Persistence] Error loading state, falling back to defaults:', err);
+    devices = [...DEFAULT_DEVICES];
+    kitchenItems = [...DEFAULT_KITCHEN_ITEMS];
+    automations = [...DEFAULT_AUTOMATIONS];
+    notifications = [...DEFAULT_NOTIFICATIONS];
+    platforms = [...DEFAULT_PLATFORMS];
+  }
+}
+
+function saveState() {
+  try {
+    const dataToSave = {
+      devices,
+      kitchenItems,
+      automations,
+      notifications,
+      platforms
+    };
+    fs.writeFileSync(DATA_FILE, JSON.stringify(dataToSave, null, 2), 'utf8');
+  } catch (err) {
+    console.error('[Persistence] Error saving state:', err);
+  }
+}
+
+// Load state immediately on import
+loadState();
 
 // Weather Data Mock
 const weatherData = {
@@ -128,6 +187,7 @@ app.post('/api/devices/toggle', (req, res) => {
   if (device) {
     device.isOn = !device.isOn;
     device.lastActive = 'Şimdi';
+    saveState();
     res.json({ success: true, device });
   } else {
     res.status(404).json({ success: false, error: 'Device not found' });
@@ -140,6 +200,7 @@ app.post('/api/devices/value', (req, res) => {
   if (device) {
     device.value = value;
     device.lastActive = 'Şimdi';
+    saveState();
     res.json({ success: true, device });
   } else {
     res.status(404).json({ success: false, error: 'Device not found' });
@@ -151,6 +212,7 @@ app.post('/api/devices/automation-toggle', (req, res) => {
   const device = devices.find(d => d.id === id);
   if (device) {
     device.automationEnabled = !device.automationEnabled;
+    saveState();
     res.json({ success: true, device });
   } else {
     res.status(404).json({ success: false, error: 'Device not found' });
@@ -162,6 +224,7 @@ app.post('/api/devices/update-room', (req, res) => {
   const device = devices.find(d => d.id === id);
   if (device) {
     device.room = room || ''; // empty string represents unassigned/removed from room
+    saveState();
     res.json({ success: true, device });
   } else {
     res.status(404).json({ success: false, error: 'Device not found' });
@@ -191,6 +254,7 @@ app.post('/api/devices', (req, res) => {
   };
 
   devices.push(newDevice);
+  saveState();
   res.json({ success: true, device: newDevice });
 });
 
@@ -199,6 +263,7 @@ app.delete('/api/devices/:id', (req, res) => {
   const initialLen = devices.length;
   devices = devices.filter(d => d.id !== id);
   if (devices.length < initialLen) {
+    saveState();
     res.json({ success: true });
   } else {
     res.status(404).json({ success: false, error: 'Device not found' });
@@ -213,6 +278,7 @@ app.put('/api/devices/:id', (req, res) => {
   if (device) {
     if (name !== undefined) device.name = name;
     if (room !== undefined) device.room = room;
+    saveState();
     res.json({ success: true, device });
   } else {
     res.status(404).json({ success: false, error: 'Device not found' });
@@ -230,6 +296,7 @@ app.post('/api/rooms/rename', (req, res) => {
       d.room = newName;
     }
   });
+  saveState();
   res.json({ success: true, devices });
 });
 
@@ -244,6 +311,7 @@ app.post('/api/kitchen-stock', (req, res) => {
     isMissing: !!isMissing
   };
   kitchenItems.push(newItem);
+  saveState();
   res.json({ success: true, item: newItem });
 });
 
@@ -259,6 +327,7 @@ app.put('/api/kitchen-stock/:id', (req, res) => {
       quantity: quantity !== undefined ? quantity : kitchenItems[itemIndex].quantity,
       isMissing: isMissing !== undefined ? isMissing : kitchenItems[itemIndex].isMissing
     };
+    saveState();
     res.json({ success: true, item: kitchenItems[itemIndex] });
   } else {
     res.status(404).json({ success: false, error: 'Item not found' });
@@ -268,6 +337,7 @@ app.put('/api/kitchen-stock/:id', (req, res) => {
 app.delete('/api/kitchen-stock/:id', (req, res) => {
   const { id } = req.params;
   kitchenItems = kitchenItems.filter(k => k.id !== id);
+  saveState();
   res.json({ success: true });
 });
 
@@ -285,6 +355,7 @@ app.post('/api/automations', (req, res) => {
     actionValue
   };
   automations.push(newAut);
+  saveState();
   res.json({ success: true, automation: newAut });
 });
 
@@ -293,6 +364,7 @@ app.post('/api/automations/toggle', (req, res) => {
   const aut = automations.find(a => a.id === id);
   if (aut) {
     aut.active = !aut.active;
+    saveState();
     res.json({ success: true, automation: aut });
   } else {
     res.status(404).json({ success: false, error: 'Automation not found' });
@@ -302,6 +374,7 @@ app.post('/api/automations/toggle', (req, res) => {
 app.delete('/api/automations/:id', (req, res) => {
   const { id } = req.params;
   automations = automations.filter(a => a.id !== id);
+  saveState();
   res.json({ success: true });
 });
 
@@ -317,6 +390,7 @@ app.post('/api/platforms/toggle', (req, res) => {
       // Restore some mock devices
       platform.deviceCount = platform.type === 'google' ? 15 : Math.floor(Math.random() * 8) + 2;
     }
+    saveState();
     res.json({ success: true, platform });
   } else {
     res.status(404).json({ success: false, error: 'Platform not found' });
@@ -332,6 +406,7 @@ app.post('/api/notifications/read', (req, res) => {
     const notif = notifications.find(n => n.id === id);
     if (notif) notif.isRead = true;
   }
+  saveState();
   res.json({ success: true });
 });
 
@@ -524,6 +599,7 @@ app.post('/api/ai/command', async (req, res) => {
       });
     }
 
+    saveState();
     return res.json({
       success: true,
       reply: parsed.reply,
@@ -673,6 +749,7 @@ Lütfen JSON formatında yanıt ver.`;
       });
     }
 
+    saveState();
     res.json({
       success: true,
       reply: parsed.reply,
@@ -719,6 +796,7 @@ Lütfen JSON formatında yanıt ver.`;
       });
     }
 
+    saveState();
     res.json({
       success: true,
       reply: fallbackParsed.reply,
