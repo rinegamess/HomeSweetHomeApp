@@ -347,7 +347,7 @@ export default function DevicesView({
           return (
             <div
               key={device.id}
-              className={`p-5 rounded-3xl border transition-all flex flex-col justify-between h-72 group ${
+              className={`p-5 rounded-3xl border transition-all flex flex-col justify-between h-72 group relative overflow-hidden ${
                 !device.isOnline
                   ? 'bg-slate-50/50 dark:bg-polish-dark-card/40 border-slate-200/40 dark:border-slate-900/40 opacity-60'
                   : device.isOn
@@ -355,11 +355,43 @@ export default function DevicesView({
                   : 'bg-white dark:bg-polish-dark-card border-slate-200/60 dark:border-slate-800/80 shadow-xs'
               }`}
             >
+              {/* Delete Confirmation Full-Card Overlay */}
+              {confirmDeleteId === device.id && (
+                <div className="absolute inset-0 bg-white/95 dark:bg-slate-900/95 rounded-3xl z-10 flex flex-col items-center justify-center p-4 text-center animate-fadeIn">
+                  <Trash2 className="w-8 h-8 text-rose-500 mb-2 animate-bounce" />
+                  <p className="text-xs font-bold text-slate-800 dark:text-slate-100 px-2 leading-normal">
+                    {language === 'tr' ? `"${device.name}" silinsin mi?` : `Delete "${device.name}"?`}
+                  </p>
+                  <p className="text-[10px] text-slate-400 mt-1 mb-4">
+                    {language === 'tr' ? 'Bu işlem geri alınamaz.' : 'This action cannot be undone.'}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await onDeleteDevice(device.id);
+                        setConfirmDeleteId(null);
+                      }}
+                      className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-md shadow-rose-500/15 transition-all cursor-pointer"
+                    >
+                      {language === 'tr' ? 'Evet, Sil' : 'Yes, Delete'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteId(null)}
+                      className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-350 transition-all cursor-pointer"
+                    >
+                      {language === 'tr' ? 'İptal' : 'Cancel'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div>
                 {/* Header of Card */}
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className={`p-3 rounded-2xl transition-colors ${
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className={`p-3 rounded-2xl transition-colors shrink-0 ${
                       !device.isOnline
                         ? 'bg-slate-200/50 dark:bg-slate-800/40'
                         : device.isOn
@@ -368,7 +400,7 @@ export default function DevicesView({
                     }`}>
                       {getDeviceIcon(device.type, device.isOn)}
                     </div>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       {editingDeviceId === device.id ? (
                         <form
                           onSubmit={async (e) => {
@@ -384,7 +416,7 @@ export default function DevicesView({
                             type="text"
                             value={tempDeviceName}
                             onChange={e => setTempDeviceName(e.target.value)}
-                            className="px-2 py-0.5 text-xs border border-indigo-300 dark:border-indigo-500 rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500 w-24 sm:w-28"
+                            className="px-2 py-0.5 text-xs border border-indigo-300 dark:border-indigo-500 rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500 w-full"
                             autoFocus
                           />
                           <button
@@ -403,7 +435,7 @@ export default function DevicesView({
                         </form>
                       ) : (
                         <div className="flex items-center gap-1 group/title">
-                          <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-100 font-display truncate max-w-[100px] sm:max-w-[130px]">
+                          <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-100 font-display truncate max-w-[120px] sm:max-w-[150px]">
                             {device.name}
                           </h4>
                           {onRenameDevice && (
@@ -421,43 +453,20 @@ export default function DevicesView({
                           )}
                         </div>
                       )}
-                      <p className="text-[11px] text-slate-400 mt-0.5">{device.room || (language === 'tr' ? 'Oda Yok' : 'No Room')}</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5 truncate">{device.room || (language === 'tr' ? 'Oda Yok' : 'No Room')}</p>
                     </div>
                   </div>
 
                    {/* Card Controls on Right */}
-                  <div className="flex items-center gap-1.5">
-                    {confirmDeleteId === device.id ? (
-                      <div className="flex items-center gap-1 bg-rose-50 dark:bg-rose-950/10 p-1 rounded-lg border border-rose-100 dark:border-rose-900/30">
-                        <span className="text-[9px] text-rose-600 dark:text-rose-400 font-bold px-1">{language === 'tr' ? 'Emin misiniz?' : 'Sure?'}</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onDeleteDevice(device.id);
-                            setConfirmDeleteId(null);
-                          }}
-                          className="px-2 py-0.5 text-[9px] font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-md cursor-pointer"
-                        >
-                          {language === 'tr' ? 'Evet' : 'Yes'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteId(null)}
-                          className="px-2 py-0.5 text-[9px] font-bold bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-md cursor-pointer"
-                        >
-                          {language === 'tr' ? 'Hayır' : 'No'}
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeleteId(device.id)}
-                        className="p-2 rounded-xl text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 transition-all cursor-pointer"
-                        title={language === 'tr' ? 'Cihazı Kaldır' : 'Remove Device'}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteId(device.id)}
+                      className="p-2 rounded-xl text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 transition-all cursor-pointer"
+                      title={language === 'tr' ? 'Cihazı Kaldır' : 'Remove Device'}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
 
                     {/* On/Off Switch Button */}
                     {isInteractive && (

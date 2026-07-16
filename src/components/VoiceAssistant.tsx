@@ -345,9 +345,16 @@ export default function VoiceAssistant({
           </div>
 
           {micError && (
-            <p className="text-[10px] font-semibold text-rose-500 bg-rose-50 dark:bg-rose-950/20 px-4 py-2 rounded-xl text-center">
-              {micError}
-            </p>
+            <div className="text-[10px] font-semibold text-rose-500 bg-rose-50 dark:bg-rose-950/20 px-4 py-2.5 rounded-2xl text-center border border-rose-100/50 dark:border-rose-900/30 max-w-xs space-y-1">
+              <p>{micError}</p>
+              {/iPhone|iPad|iPod/i.test(navigator.userAgent) && (
+                <p className="text-[9px] text-slate-500 dark:text-slate-400 font-medium leading-relaxed">
+                  {language === 'tr'
+                    ? '💡 iPad/iOS üzerinde mikrofon izinleri iframe içinde kısıtlıdır. Sesi kullanmak için sağ üstteki "Yeni Sekmede Aç" butonu ile uygulamayı açın.'
+                    : '💡 On iPad/iOS, microphone use is restricted inside frames. Click "Open in New Tab" at the top-right to run the app in a standalone window.'}
+                </p>
+              )}
+            </div>
           )}
 
           {/* Voice Output synthesis Toggle */}

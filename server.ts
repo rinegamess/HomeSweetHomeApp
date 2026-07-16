@@ -335,6 +335,147 @@ app.post('/api/notifications/read', (req, res) => {
   res.json({ success: true });
 });
 
+// Local Heuristic Parser for high availability fallback
+function localHeuristicParser(command: string, currentLanguage: 'tr' | 'en') {
+  const cmd = command.toLowerCase().trim();
+  let reply = '';
+  const deviceUpdates: any[] = [];
+  const stockUpdates: any[] = [];
+
+  // Helper to find device by name/room keywords
+  const findDeviceByKeyword = (cmdStr: string) => {
+    let matchedDevice = devices.find(d => cmdStr.includes(d.name.toLowerCase()));
+    if (!matchedDevice) {
+      const roomsList = ['salon', 'mutfak', 'yatak odası', 'koridor', 'banyo', 'bahçe', 'bedroom', 'living room', 'kitchen', 'corridor', 'bathroom', 'garden'];
+      const typesList = [
+        { keys: ['lamba', 'ampul', 'ışık', 'projektör', 'led', 'aydınlatma', 'bulb', 'light', 'lamp'], type: 'bulb' },
+        { keys: ['kahve', 'priz', 'soket', 'coffee', 'socket', 'plug'], type: 'socket' },
+        { keys: ['klima', 'air conditioner', 'ac'], type: 'air_conditioner' },
+        { keys: ['süpürge', 'robot', 'vacuum', 'cleaner'], type: 'robot_vacuum' },
+        { keys: ['tv', 'televizyon', 'television'], type: 'tv' },
+        { keys: ['hoparlör', 'speaker', 'ses', 'sound'], type: 'speaker' },
+        { keys: ['perde', 'stor', 'curtains', 'blind'], type: 'curtains' },
+        { keys: ['hava', 'temizleyici', 'purifier', 'air purifier'], type: 'air_purifier' },
+        { keys: ['vantilatör', 'fan', 'pervane'], type: 'fan' }
+      ];
+
+      let foundRoom = roomsList.find(r => cmdStr.includes(r));
+      let foundTypeObj = typesList.find(tObj => tObj.keys.some(k => cmdStr.includes(k)));
+
+      // normalise room for comparison
+      let searchRoom = foundRoom;
+      if (searchRoom === 'living room') searchRoom = 'salon';
+      if (searchRoom === 'kitchen') searchRoom = 'mutfak';
+      if (searchRoom === 'bedroom') searchRoom = 'yatak odası';
+      if (searchRoom === 'corridor') searchRoom = 'koridor';
+      if (searchRoom === 'bathroom') searchRoom = 'banyo';
+      if (searchRoom === 'garden') searchRoom = 'bahçe';
+
+      if (searchRoom && foundTypeObj) {
+        matchedDevice = devices.find(d => d.room.toLowerCase() === searchRoom!.toLowerCase() && d.type === foundTypeObj!.type);
+      } else if (foundTypeObj) {
+        matchedDevice = devices.find(d => d.type === foundTypeObj!.type);
+      }
+    }
+    return matchedDevice;
+  };
+
+  const isTurnOn = cmd.includes('aç') || cmd.includes('çalıştır') || cmd.includes('başlat') || cmd.includes('turn on') || cmd.includes('start') || cmd.includes('aktif et') || cmd.includes('open');
+  const isTurnOff = cmd.includes('kapat') || cmd.includes('kapa') || cmd.includes('durdur') || cmd.includes('turn off') || cmd.includes('stop') || cmd.includes('pasif et') || cmd.includes('close');
+
+  const matchedDevice = findDeviceByKeyword(cmd);
+
+  if (matchedDevice && (isTurnOn || isTurnOff)) {
+    const targetState = isTurnOn;
+    deviceUpdates.push({
+      id: matchedDevice.id,
+      isOn: targetState
+    });
+    reply = currentLanguage === 'tr'
+      ? `Tabii ki, yerel yedek asistan motoru üzerinden "${matchedDevice.name}" cihazını ${targetState ? 'açtım' : 'kapattım'}.`
+      : `Understood, I have turned ${targetState ? 'on' : 'off'} the "${matchedDevice.name}" using the fallback engine.`;
+  }
+  else if (matchedDevice && (cmd.includes('derece') || cmd.includes('sıcaklık') || cmd.includes('volüm') || cmd.includes('ses') || cmd.includes('temp') || cmd.includes('degree') || cmd.includes('volume') || /\d+/.test(cmd))) {
+    const numbers = cmd.match(/\d+/);
+    if (numbers) {
+      const val = parseInt(numbers[0], 10);
+      deviceUpdates.push({
+        id: matchedDevice.id,
+        isOn: true,
+        value: val
+      });
+      reply = currentLanguage === 'tr'
+        ? `Tabii ki, "${matchedDevice.name}" değerini ${val} olarak ayarladım. (Yedek Motor)`
+        : `Sure, I have set the "${matchedDevice.name}" value to ${val}. (Fallback Motor)`;
+    }
+  }
+  else if (cmd.includes('ekle') || cmd.includes('add') || cmd.includes('koy') || cmd.includes('alındı')) {
+    let productName = '';
+    const cleanCmd = cmd.replace(/ekle|add|koy|alındı/g, '').trim();
+    const words = cleanCmd.split(' ');
+    const filteredWords = words.filter(w => !/\d+/.test(w) && !['adet', 'kg', 'paket', 'gram', 'litre', 'tane', 'pcs', 'bag', 'pack'].includes(w));
+    productName = filteredWords.join(' ').trim();
+    if (productName.length > 2) {
+      productName = productName.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      const numberMatch = cmd.match(/\d+/);
+      const unit = cmd.includes('kg') ? 'Kg' : cmd.includes('paket') || cmd.includes('pack') ? 'Paket' : 'Adet';
+      const quantity = numberMatch ? `${numberMatch[0]} ${unit}` : '1 Adet';
+
+      stockUpdates.push({
+        action: 'add',
+        name: productName,
+        quantity: quantity,
+        category: 'Atıştırmalık'
+      });
+      reply = currentLanguage === 'tr'
+        ? `Mutfak listesine "${productName}" (${quantity}) başarıyla ekledim.`
+        : `Successfully added "${productName}" (${quantity}) to kitchen stock.`;
+    }
+  }
+  else if (cmd.includes('sil') || cmd.includes('çıkar') || cmd.includes('kaldır') || cmd.includes('remove') || cmd.includes('tükendi') || cmd.includes('delete')) {
+    let searchName = cmd.replace(/sil|çıkar|kaldır|remove|tükendi|delete/g, '').trim();
+    const matchedStockItem = kitchenItems.find(k => searchName.includes(k.name.toLowerCase()) || k.name.toLowerCase().includes(searchName));
+    if (matchedStockItem) {
+      stockUpdates.push({
+        action: 'remove',
+        name: matchedStockItem.name
+      });
+      reply = currentLanguage === 'tr'
+        ? `Mutfak listesinden "${matchedStockItem.name}" ürününü çıkardım.`
+        : `Removed "${matchedStockItem.name}" from the kitchen stock list.`;
+    } else {
+      reply = currentLanguage === 'tr'
+        ? `Mutfak stoğunda "${searchName}" adında eşleşen bir ürün bulamadım.`
+        : `Could not find any kitchen product matching "${searchName}" to remove.`;
+    }
+  }
+  else {
+    reply = currentLanguage === 'tr'
+      ? `İsteğinizi tam olarak anlayamadım ancak yardımcı olmaya hazırım. Cihaz kontrolü için "klimayı aç", mutfak için "süt ekle" diyebilirsiniz.`
+      : `I couldn't fully parse the request. You can say "turn on AC" or "add milk" to control the smart home features.`;
+  }
+
+  return { reply, deviceUpdates, stockUpdates };
+}
+
+async function generateContentWithRetry(ai: GoogleGenAI, params: any, maxRetries = 3) {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    try {
+      return await ai.models.generateContent(params);
+    } catch (err: any) {
+      attempt++;
+      console.warn(`[Gemini API] Retry attempt ${attempt}/${maxRetries} failed:`, err.message || err);
+      if (attempt < maxRetries) {
+        const delay = Math.pow(2, attempt) * 600;
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
 // AI Assistant endpoint: Handle voice or text command using Gemini!
 app.post('/api/ai/command', async (req, res) => {
   const { command, history } = req.body;
@@ -342,14 +483,52 @@ app.post('/api/ai/command', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Command is required' });
   }
 
+  const isTurkish = !/[a-zA-Z]/.test(command) || command.toLowerCase().includes('aç') || command.toLowerCase().includes('kapat') || command.toLowerCase().includes('ekle') || command.toLowerCase().includes('sil');
+  const detectedLanguage = isTurkish ? 'tr' : 'en';
+
   const ai = getAi();
   if (!ai) {
-    // Graceful fallback when Gemini API is not yet configured or error occurs
+    const parsed = localHeuristicParser(command, detectedLanguage);
+    
+    // Apply local updates immediately to state
+    if (parsed.deviceUpdates && Array.isArray(parsed.deviceUpdates)) {
+      parsed.deviceUpdates.forEach((up: any) => {
+        const device = devices.find(d => d.id === up.id);
+        if (device) {
+          if (up.isOn !== undefined) device.isOn = up.isOn;
+          if (up.value !== undefined) device.value = up.value;
+          device.lastActive = 'Şimdi (Yedek)';
+        }
+      });
+    }
+
+    if (parsed.stockUpdates && Array.isArray(parsed.stockUpdates)) {
+      parsed.stockUpdates.forEach((up: any) => {
+        const itemIndex = kitchenItems.findIndex(k => k.name.toLowerCase() === up.name.toLowerCase());
+        if (up.action === 'remove' && itemIndex !== -1) {
+          kitchenItems.splice(itemIndex, 1);
+        } else if (up.action === 'add') {
+          if (itemIndex !== -1) {
+            kitchenItems[itemIndex].quantity = up.quantity;
+            kitchenItems[itemIndex].isMissing = false;
+          } else {
+            kitchenItems.push({
+              id: `kt-${Date.now()}-${Math.random()}`,
+              name: up.name,
+              category: up.category || 'Atıştırmalık',
+              isMissing: false,
+              quantity: up.quantity || '1 Adet'
+            });
+          }
+        }
+      });
+    }
+
     return res.json({
       success: true,
-      reply: `Gemini API anahtarı ayarlanmamış görünüyor. Lütfen platform Secrets sekmesinden GEMINI_API_KEY anahtarınızı ekleyin. Komutunuzu yerel motorla simüle ettim: "${command}" için işlem tamamlandı!`,
-      deviceUpdates: [],
-      stockUpdates: []
+      reply: parsed.reply,
+      deviceUpdates: parsed.deviceUpdates,
+      stockUpdates: parsed.stockUpdates
     });
   }
 
@@ -407,7 +586,7 @@ Kullanıcının Son Komutu: "${command}"
 
 Lütfen JSON formatında yanıt ver.`;
 
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry(ai, {
       model: 'gemini-3.5-flash',
       contents: prompt,
       config: {
@@ -417,7 +596,7 @@ Lütfen JSON formatında yanıt ver.`;
       }
     });
 
-    const resultText = response.text || '{}';
+    const resultText = response && response.text ? response.text : '{}';
     const parsed = JSON.parse(resultText.trim());
 
     // Apply device updates in-memory
@@ -502,12 +681,49 @@ Lütfen JSON formatında yanıt ver.`;
     });
 
   } catch (error: any) {
-    console.error('Gemini API Error:', error);
+    console.error('Gemini API Error (Initiating fallback):', error);
+    // Silent failover to Local Heuristic Parser!
+    const fallbackParsed = localHeuristicParser(command, detectedLanguage);
+    
+    // Apply local updates immediately to state
+    if (fallbackParsed.deviceUpdates && Array.isArray(fallbackParsed.deviceUpdates)) {
+      fallbackParsed.deviceUpdates.forEach((up: any) => {
+        const device = devices.find(d => d.id === up.id);
+        if (device) {
+          if (up.isOn !== undefined) device.isOn = up.isOn;
+          if (up.value !== undefined) device.value = up.value;
+          device.lastActive = 'Şimdi (Yedek)';
+        }
+      });
+    }
+
+    if (fallbackParsed.stockUpdates && Array.isArray(fallbackParsed.stockUpdates)) {
+      fallbackParsed.stockUpdates.forEach((up: any) => {
+        const itemIndex = kitchenItems.findIndex(k => k.name.toLowerCase() === up.name.toLowerCase());
+        if (up.action === 'remove' && itemIndex !== -1) {
+          kitchenItems.splice(itemIndex, 1);
+        } else if (up.action === 'add') {
+          if (itemIndex !== -1) {
+            kitchenItems[itemIndex].quantity = up.quantity;
+            kitchenItems[itemIndex].isMissing = false;
+          } else {
+            kitchenItems.push({
+              id: `kt-${Date.now()}-${Math.random()}`,
+              name: up.name,
+              category: up.category || 'Atıştırmalık',
+              isMissing: false,
+              quantity: up.quantity || '1 Adet'
+            });
+          }
+        }
+      });
+    }
+
     res.json({
       success: true,
-      reply: `Üzgünüm, şu an sunucu tarafında bir hata oluştu: ${error.message || 'Bilinmeyen Hata'}. Ancak isteğinizi yerel simülatörle işlemeye çalışıyorum.`,
-      deviceUpdates: [],
-      stockUpdates: []
+      reply: fallbackParsed.reply,
+      deviceUpdates: fallbackParsed.deviceUpdates,
+      stockUpdates: fallbackParsed.stockUpdates
     });
   }
 });

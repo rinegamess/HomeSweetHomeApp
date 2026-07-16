@@ -798,7 +798,16 @@ export default function DashboardView({
                       </div>
 
                       {micError && (
-                        <p className="text-[10px] text-rose-400 font-semibold px-2">{micError}</p>
+                        <div className="space-y-1 px-2">
+                          <p className="text-[10px] text-rose-400 font-semibold">{micError}</p>
+                          {/iPhone|iPad|iPod/i.test(navigator.userAgent) && (
+                            <p className="text-[9px] text-slate-400 leading-normal font-medium">
+                              {language === 'tr'
+                                ? '💡 iPad/iOS üzerinde mikrofon kısıtlamasını aşmak için sağ üstten "Yeni Sekmede Aç" butonuna basarak uygulamayı açın.'
+                                : '💡 On iPad/iOS, you can click "Open in New Tab" at the top-right to bypass iframe mic limitations.'}
+                            </p>
+                          )}
+                        </div>
                       )}
                     </div>
 
