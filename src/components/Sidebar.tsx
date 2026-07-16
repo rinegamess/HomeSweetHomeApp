@@ -61,11 +61,11 @@ export default function Sidebar({
                 </span>
               </div>
               <div>
-                <h2 className="text-xl font-display font-bold tracking-tight text-slate-900 dark:text-white leading-tight">
-                  {t.appName}
+                <h2 className="text-[17px] font-display font-bold tracking-tight text-slate-900 dark:text-white leading-tight">
+                  Home Sweet Home
                 </h2>
-                <span className="text-[10px] font-medium font-sans text-indigo-500 dark:text-indigo-400 tracking-wider uppercase">
-                  OS v1.4.0
+                <span className="text-[9px] font-semibold font-sans text-indigo-500 dark:text-indigo-400 tracking-wider uppercase">
+                  OS | powered by Recep
                 </span>
               </div>
             </div>
