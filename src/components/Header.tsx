@@ -62,7 +62,7 @@ export default function Header({
 
   return (
     <header className="sticky top-0 z-30 flex flex-col md:flex-row md:items-center md:justify-between px-6 py-4 gap-4 bg-white/80 dark:bg-polish-dark-header/80 backdrop-blur-md border-b border-slate-200/60 dark:border-slate-800/80 transition-colors duration-300">
-      <div>
+      <div className="pl-12 md:pl-0">
         <h1 className="text-2xl font-display font-bold tracking-tight text-slate-900 dark:text-white transition-colors">
           {title}
         </h1>

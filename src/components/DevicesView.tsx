@@ -36,6 +36,9 @@ export default function DevicesView({
   const [isOnline, setIsOnline] = useState(true);
   const [isOn, setIsOn] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [ipAddress, setIpAddress] = useState('');
+  const [brand, setBrand] = useState('');
+  const [model, setModel] = useState('');
 
   // Filter States
   const [roomFilter, setRoomFilter] = useState<string>('all');
@@ -68,10 +71,16 @@ export default function DevicesView({
       type,
       isOnline,
       isOn: type.includes('sensor') ? true : isOn,
+      ipAddress: ipAddress.trim() || undefined,
+      brand: brand.trim() || undefined,
+      model: model.trim() || undefined,
     });
 
     if (success) {
       setName('');
+      setIpAddress('');
+      setBrand('');
+      setModel('');
       setIsFormOpen(false);
     }
     setIsSubmitting(false);
@@ -260,6 +269,48 @@ export default function DevicesView({
                 <option value="temperature_sensor">{language === 'tr' ? '🌡️ Sıcaklık Sensörü' : '🌡️ Temp Sensor'}</option>
                 <option value="humidity_sensor">{language === 'tr' ? '💦 Nem Sensörü' : '💦 Humidity Sensor'}</option>
               </select>
+            </div>
+          </div>
+
+          {/* Network & Brand Setup */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-t border-slate-100 dark:border-slate-800/40 pt-4">
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                {language === 'tr' ? 'IP Adresi (İsteğe Bağlı)' : 'IP Address (Optional)'}
+              </label>
+              <input
+                type="text"
+                placeholder="Örn: 192.168.1.105"
+                value={ipAddress}
+                onChange={(e) => setIpAddress(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-850 bg-slate-50 dark:bg-polish-dark-header text-xs text-slate-700 dark:text-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                {language === 'tr' ? 'Marka (İsteğe Bağlı)' : 'Brand (Optional)'}
+              </label>
+              <input
+                type="text"
+                placeholder="Örn: Tapo, Tuya"
+                value={brand}
+                onChange={(e) => setBrand(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-850 bg-slate-50 dark:bg-polish-dark-header text-xs text-slate-700 dark:text-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                {language === 'tr' ? 'Model (İsteğe Bağlı)' : 'Model (Optional)'}
+              </label>
+              <input
+                type="text"
+                placeholder="Örn: P100"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-850 bg-slate-50 dark:bg-polish-dark-header text-xs text-slate-700 dark:text-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+              />
             </div>
           </div>
 
@@ -486,15 +537,31 @@ export default function DevicesView({
                 </div>
 
                 <div className="flex flex-wrap gap-1.5 mt-2">
-                  {!device.isOnline && (
-                    <span className="px-2.5 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-500 text-[9px] font-bold">
-                      {t.deviceOffline}
+                  {device.isOnline ? (
+                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold">
+                      {language === 'tr' ? 'Cihaz aktif durumda' : 'Device is active'}
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-0.5 rounded-full bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 text-[9px] font-bold">
+                      {language === 'tr' ? 'Cihaz pasif durumda' : 'Device is passive'}
                     </span>
                   )}
 
                   {isSensor && device.isOnline && (
                     <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold">
                       SENSÖR
+                    </span>
+                  )}
+
+                  {device.brand && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 text-[9px] font-bold uppercase">
+                      {device.brand} {device.model}
+                    </span>
+                  )}
+
+                  {device.ipAddress && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-350 text-[9px] font-mono">
+                      {device.ipAddress}
                     </span>
                   )}
                 </div>
@@ -586,13 +653,19 @@ export default function DevicesView({
                     )}
 
                     {/* Sensor or other readout value */}
-                    {device.value !== undefined && !['bulb', 'led_controller', 'air_conditioner', 'speaker'].includes(device.type) && (
-                      <div className="flex items-center justify-between text-[11px] text-slate-500">
-                        <span className="font-semibold">{t.stateText}</span>
-                        <span className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-900 font-mono font-bold text-slate-700 dark:text-slate-300">
-                          {device.value}
-                        </span>
-                      </div>
+                    {!['bulb', 'led_controller', 'air_conditioner', 'speaker'].includes(device.type) && (
+                      device.value === 1 || device.value === '1' || (device.value as unknown) === true || device.type === 'socket' || device.value === undefined ? (
+                        <p className="text-[11px] text-slate-400 italic text-center py-1">
+                          {language === 'tr' ? 'Cihaz aktif (açık) durumda.' : 'Device is currently powered on.'}
+                        </p>
+                      ) : (
+                        <div className="flex items-center justify-between text-[11px] text-slate-500">
+                          <span className="font-semibold">{t.stateText}</span>
+                          <span className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-900 font-mono font-bold text-slate-700 dark:text-slate-300">
+                            {device.value}
+                          </span>
+                        </div>
+                      )
                     )}
                   </div>
                 )}

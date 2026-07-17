@@ -35,6 +35,9 @@ export interface Device {
   lastActive: string;
   automationEnabled: boolean;
   value?: string | number; // e.g. brightness 70%, temperature 22
+  ipAddress?: string; // e.g. "192.168.1.45"
+  brand?: string;     // e.g. "Tapo", "Tuya"
+  model?: string;     // e.g. "P100"
 }
 
 export type KitchenCategory =

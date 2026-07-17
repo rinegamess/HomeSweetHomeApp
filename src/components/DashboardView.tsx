@@ -149,6 +149,12 @@ export default function DashboardView({
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [micError, setMicError] = useState<string | null>(null);
 
+  // MediaRecorder states for fallback on iPad/iOS
+  const [isRecordingAudio, setIsRecordingAudio] = useState(false);
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recorderStreamRef = useRef<MediaStream | null>(null);
+
   // Speech Recognition Reference
   const recognitionRef = useRef<any>(null);
 
@@ -182,12 +188,131 @@ export default function DashboardView({
     }
   };
 
+  // MediaRecorder start/stop helpers
+  const startAudioRecording = async () => {
+    try {
+      setMicError(null);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recorderStreamRef.current = stream;
+      audioChunksRef.current = [];
+      
+      let options = {};
+      if (MediaRecorder.isTypeSupported('audio/webm')) {
+        options = { mimeType: 'audio/webm' };
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        options = { mimeType: 'audio/mp4' };
+      }
+      
+      const recorder = new MediaRecorder(stream, options);
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+      
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType });
+        if (recorderStreamRef.current) {
+          recorderStreamRef.current.getTracks().forEach(track => track.stop());
+        }
+        
+        setIsAiProcessing(true);
+        try {
+          const reader = new FileReader();
+          reader.readAsDataURL(audioBlob);
+          reader.onloadend = async () => {
+            const base64Data = (reader.result as string).split(',')[1];
+            await handleSendAudioCommand(base64Data, recorder.mimeType);
+          };
+        } catch (err) {
+          console.error("FileReader error:", err);
+          setIsAiProcessing(false);
+        }
+      };
+      
+      setMediaRecorder(recorder);
+      recorder.start();
+      setIsRecordingAudio(true);
+      setIsListening(true);
+      
+      // Auto-stop after 8 seconds
+      setTimeout(() => {
+        if (recorder && recorder.state === 'recording') {
+          recorder.stop();
+          setIsRecordingAudio(false);
+          setIsListening(false);
+        }
+      }, 8000);
+      
+    } catch (err: any) {
+      console.error("MediaRecorder start failed:", err);
+      setMicError(language === 'tr' 
+        ? 'Mikrofon izni alınamadı veya engellendi.' 
+        : 'Microphone permission denied or blocked.');
+    }
+  };
+
+  const stopAudioRecording = () => {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+      setIsRecordingAudio(false);
+      setIsListening(false);
+    }
+  };
+
+  const handleSendAudioCommand = async (base64Audio: string, mimeTypeString: string) => {
+    setIsAiProcessing(true);
+    setLastUserCommand(language === 'tr' ? '🎤 Sesli Komut' : '🎤 Voice Command');
+    try {
+      const response = await fetch('/api/ai/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          audio: base64Audio,
+          mimeType: mimeTypeString,
+          language: language,
+          history: []
+        })
+      });
+
+      const data = await response.json();
+      setIsAiProcessing(false);
+
+      if (data.success) {
+        setVoiceReply(data.reply);
+        speakText(data.reply);
+
+        // Notify App.tsx to instantly fetch state
+        onVoiceCommandSuccess();
+
+        onAddNotification({
+          title: language === 'tr' ? 'Sekreter AI (Hızlı Ses)' : 'Sekreter AI (Quick Voice)',
+          message: data.reply,
+          type: 'success'
+        });
+      } else {
+        throw new Error(data.reply || 'Voice command parsing failed');
+      }
+    } catch (err: any) {
+      setIsAiProcessing(false);
+      console.error("Audio Command Error:", err);
+      const errReply = language === 'tr'
+        ? 'Ses kaydı gönderildi ancak asistan tarafından çözümlenemedi.'
+        : 'Audio was sent but assistant failed to transcribe/process it.';
+      setVoiceReply(errReply);
+      speakText(errReply);
+    }
+  };
+
   const toggleMic = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setMicError(language === 'tr' 
-        ? 'Bu tarayıcıda veya iframe ortamında ses tanıma (Web Speech API) desteklenmiyor. Lütfen komutları yazarak gönderin.' 
-        : 'Voice recognition (Web Speech API) is not supported in this browser or iframe environment. Please type your commands.');
+      // Bypassing Web Speech API restriction by falling back to MediaRecorder audio transmission!
+      if (isRecordingAudio) {
+        stopAudioRecording();
+      } else {
+        startAudioRecording();
+      }
       return;
     }
 
@@ -253,6 +378,7 @@ export default function DashboardView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           command: commandString,
+          language: language,
           history: []
         })
       });
@@ -800,13 +926,6 @@ export default function DashboardView({
                       {micError && (
                         <div className="space-y-1 px-2">
                           <p className="text-[10px] text-rose-400 font-semibold">{micError}</p>
-                          {/iPhone|iPad|iPod/i.test(navigator.userAgent) && (
-                            <p className="text-[9px] text-slate-400 leading-normal font-medium">
-                              {language === 'tr'
-                                ? '💡 iPad/iOS üzerinde mikrofon kısıtlamasını aşmak için sağ üstten "Yeni Sekmede Aç" butonuna basarak uygulamayı açın.'
-                                : '💡 On iPad/iOS, you can click "Open in New Tab" at the top-right to bypass iframe mic limitations.'}
-                            </p>
-                          )}
                         </div>
                       )}
                     </div>

@@ -32,6 +32,7 @@ const DEFAULT_DEVICES: Device[] = [
   { id: 'dev-13', name: 'Salon Sıcaklık Sensörü', type: 'temperature_sensor', room: 'Salon', isOnline: true, isOn: true, batteryLevel: 90, lastActive: 'Sürekli Aktif', automationEnabled: true, value: 24 },
   { id: 'dev-14', name: 'Yatak Odası Nem Sensörü', type: 'humidity_sensor', room: 'Yatak Odası', isOnline: true, isOn: true, batteryLevel: 91, lastActive: 'Sürekli Aktif', automationEnabled: true, value: 55 },
   { id: 'dev-15', name: 'Bahçe Akıllı Projektör', type: 'bulb', room: 'Bahçe', isOnline: true, isOn: false, energyConsumption: 0.18, lastActive: 'Dün 22:00', automationEnabled: true },
+  { id: 'dev-tapo-p100', name: 'Tapo P100 Akıllı Priz', type: 'socket', room: 'Salon', isOnline: true, isOn: false, energyConsumption: 0.12, lastActive: 'Şimdi', automationEnabled: true, ipAddress: '192.168.1.105', brand: 'Tapo', model: 'P100' },
 ];
 
 const DEFAULT_KITCHEN_ITEMS: KitchenItem[] = [
@@ -85,6 +86,23 @@ function loadState() {
       const fileData = fs.readFileSync(DATA_FILE, 'utf8');
       const parsed = JSON.parse(fileData);
       devices = parsed.devices || DEFAULT_DEVICES;
+      const hasTapo = devices.some(d => d.id === 'dev-tapo-p100' || (d.brand === 'Tapo' && d.model === 'P100'));
+      if (!hasTapo) {
+        devices.push({
+          id: 'dev-tapo-p100',
+          name: 'Tapo P100 Akıllı Priz',
+          type: 'socket',
+          room: 'Salon',
+          isOnline: true,
+          isOn: false,
+          energyConsumption: 0.12,
+          lastActive: 'Şimdi',
+          automationEnabled: true,
+          ipAddress: '192.168.1.105',
+          brand: 'Tapo',
+          model: 'P100'
+        });
+      }
       kitchenItems = parsed.kitchenItems || DEFAULT_KITCHEN_ITEMS;
       automations = parsed.automations || DEFAULT_AUTOMATIONS;
       notifications = parsed.notifications || DEFAULT_NOTIFICATIONS;
@@ -233,7 +251,7 @@ app.post('/api/devices/update-room', (req, res) => {
 
 // Device Create and Delete Endpoints
 app.post('/api/devices', (req, res) => {
-  const { name, type, room, isOnline, isOn, value } = req.body;
+  const { name, type, room, isOnline, isOn, value, ipAddress, brand, model } = req.body;
   if (!name || !type || !room) {
     return res.status(400).json({ success: false, error: 'Name, type, and room are required' });
   }
@@ -250,7 +268,10 @@ app.post('/api/devices', (req, res) => {
     automationEnabled: false,
     value: value !== undefined ? value : (isSensor ? (type === 'temperature_sensor' ? 24 : type === 'humidity_sensor' ? 55 : 'Normal') : (type === 'bulb' || type === 'led_controller' ? 75 : type === 'speaker' ? 40 : undefined)),
     energyConsumption: isSensor ? undefined : 0.01,
-    batteryLevel: isSensor || type === 'curtains' ? 100 : undefined
+    batteryLevel: isSensor || type === 'curtains' ? 100 : undefined,
+    ipAddress: ipAddress || undefined,
+    brand: brand || undefined,
+    model: model || undefined
   };
 
   devices.push(newDevice);
@@ -419,7 +440,12 @@ function localHeuristicParser(command: string, currentLanguage: 'tr' | 'en') {
 
   // Helper to find device by name/room keywords
   const findDeviceByKeyword = (cmdStr: string) => {
-    let matchedDevice = devices.find(d => cmdStr.includes(d.name.toLowerCase()));
+    let matchedDevice = devices.find(d => 
+      cmdStr.includes(d.name.toLowerCase()) || 
+      d.name.toLowerCase().includes(cmdStr) ||
+      (d.brand && cmdStr.includes(d.brand.toLowerCase())) ||
+      (d.model && cmdStr.includes(d.model.toLowerCase()))
+    );
     if (!matchedDevice) {
       const roomsList = ['salon', 'mutfak', 'yatak odası', 'koridor', 'banyo', 'bahçe', 'bedroom', 'living room', 'kitchen', 'corridor', 'bathroom', 'garden'];
       const typesList = [
@@ -507,8 +533,8 @@ function localHeuristicParser(command: string, currentLanguage: 'tr' | 'en') {
         : `Successfully added "${productName}" (${quantity}) to kitchen stock.`;
     }
   }
-  else if (cmd.includes('sil') || cmd.includes('çıkar') || cmd.includes('kaldır') || cmd.includes('remove') || cmd.includes('tükendi') || cmd.includes('delete')) {
-    let searchName = cmd.replace(/sil|çıkar|kaldır|remove|tükendi|delete/g, '').trim();
+  else if (cmd.includes('sil') || cmd.includes('çıkar') || cmd.includes('kaldır') || cmd.includes('remove') || cmd.includes('tükendi') || cmd.includes('delete') || cmd.includes('bitti')) {
+    let searchName = cmd.replace(/sil|çıkar|kaldır|remove|tükendi|delete|bitti/g, '').trim();
     const matchedStockItem = kitchenItems.find(k => searchName.includes(k.name.toLowerCase()) || k.name.toLowerCase().includes(searchName));
     if (matchedStockItem) {
       stockUpdates.push({
@@ -551,18 +577,42 @@ async function generateContentWithRetry(ai: GoogleGenAI, params: any, maxRetries
   }
 }
 
-// AI Assistant endpoint: Handle voice or text command using Gemini!
+// AI Assistant endpoint: Handle voice (audio) or text command using Gemini!
 app.post('/api/ai/command', async (req, res) => {
-  const { command, history } = req.body;
-  if (!command) {
-    return res.status(400).json({ success: false, error: 'Command is required' });
+  const { command, history, language, audio, mimeType } = req.body;
+
+  // We need either a command string or an audio payload to proceed
+  if (!command && !audio) {
+    return res.status(400).json({ success: false, error: 'Command or audio payload is required' });
   }
 
-  const isTurkish = !/[a-zA-Z]/.test(command) || command.toLowerCase().includes('aç') || command.toLowerCase().includes('kapat') || command.toLowerCase().includes('ekle') || command.toLowerCase().includes('sil');
-  const detectedLanguage = isTurkish ? 'tr' : 'en';
+  // Detect language properly, prioritize requested UI language, fallback to command heuristics
+  let detectedLanguage = language || 'tr';
+  if (!language && command) {
+    const isTurkishHeuristic = !/[a-zA-Z]/.test(command) || 
+      command.toLowerCase().includes('aç') || 
+      command.toLowerCase().includes('kapat') || 
+      command.toLowerCase().includes('ekle') || 
+      command.toLowerCase().includes('sil') ||
+      command.toLowerCase().includes('çalıştır') ||
+      command.toLowerCase().includes('bitti') ||
+      command.toLowerCase().includes('tükendi') ||
+      command.toLowerCase().includes('var mı');
+    detectedLanguage = isTurkishHeuristic ? 'tr' : 'en';
+  }
 
   const ai = getAi();
   if (!ai) {
+    // If no AI client, fallback to local text heuristics (audio cannot be resolved locally)
+    if (audio) {
+      return res.json({
+        success: false,
+        reply: detectedLanguage === 'tr' 
+          ? 'Mikrofon kaydı alındı ancak çözümlenmesi için yapay zeka servisine bağlanamadım.' 
+          : 'Audio recorded but failed to connect to AI for transcription.'
+      });
+    }
+
     const parsed = localHeuristicParser(command, detectedLanguage);
     
     // Apply local updates immediately to state
@@ -579,12 +629,17 @@ app.post('/api/ai/command', async (req, res) => {
 
     if (parsed.stockUpdates && Array.isArray(parsed.stockUpdates)) {
       parsed.stockUpdates.forEach((up: any) => {
-        const itemIndex = kitchenItems.findIndex(k => k.name.toLowerCase() === up.name.toLowerCase());
+        const itemIndex = kitchenItems.findIndex(k => 
+          k.name.toLowerCase() === up.name.toLowerCase() ||
+          k.name.toLowerCase().includes(up.name.toLowerCase()) ||
+          up.name.toLowerCase().includes(k.name.toLowerCase())
+        );
         if (up.action === 'remove' && itemIndex !== -1) {
-          kitchenItems.splice(itemIndex, 1);
+          // Fallback simple remove: set isMissing to true
+          kitchenItems[itemIndex].isMissing = true;
         } else if (up.action === 'add') {
           if (itemIndex !== -1) {
-            kitchenItems[itemIndex].quantity = up.quantity;
+            if (up.quantity) kitchenItems[itemIndex].quantity = up.quantity;
             kitchenItems[itemIndex].isMissing = false;
           } else {
             kitchenItems.push({
@@ -611,7 +666,9 @@ app.post('/api/ai/command', async (req, res) => {
   // Inject current system state into context
   const systemContext = `
 Sen "SEKRETER" adında akıllı ve son derece kibar bir akıllı ev yapay zeka asistanısın.
-Kullanıcı seninle Türkçe veya İngilizce konuşuyor. Öncelikle Türkçe yanıt ver. Cevapların doğal, akıcı ve insan benzeri olmalıdır.
+Kullanıcı seninle Türkçe veya İngilizce konuşuyor. Dil tercihi şu anda: ${detectedLanguage === 'tr' ? 'Türkçe (Turkish)' : 'İngilizce (English)'}. Lütfen buna uygun dilde yanıt ver.
+Eğer dil tercihi Türkçe ise, reply alanı KESİNLİKLE Türkçe olmalıdır. Asla İngilizce yanıt verme!
+Eğer dil tercihi İngilizce ise, reply alanı KESİNLİKLE İngilizce olmalıdır. Asla Türkçe yanıt verme!
 Sistemin güncel durum verileri aşağıdadır:
 
 AKILLI EV CİHAZLARI:
@@ -628,18 +685,18 @@ GÜNCEL SAAT: ${new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute
 GÜNCEL TARİH: ${new Date().toLocaleDateString('tr-TR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
 
 GÖREVLERİN:
-1. Kullanıcının komutunu ("${command}") analiz et.
+1. Kullanıcının komutunu analiz et. (Eğer ses kaydı gönderildiyse ses kaydını dinleyerek komutu/isteği çöz).
 2. Eğer bir cihazı açma, kapatma, derece veya değer ayarlama isteği varsa (örn. "salondaki klimayı 22 derece yap", "klimayı aç", "süpürgeyi çalıştır", "lamba kapat" vb.), bunu anla ve "deviceUpdates" dizisinde belirt. Cihaz ID'si ile eşleşmelidir.
 3. Eğer mutfak stoğuna dair bir şey soruyorsa (örn: "süt var mı?", "ekmek eksik mi?") mutfak envanterini incele, doğru bilgiyi ver.
-4. Mutfak stoğuna yeni bir şey eklemek ("add"), var olanı güncellemek ("update") veya silmek/çıkarmak ("remove") isterse "stockUpdates" dizisini kullan. 
+4. Mutfak stoğuna yeni bir şey eklemek ("add"), var olanı güncellemek ("update") veya bir ürünü bitti/tükendi/eksik olarak işaretlemek veya silmek ("remove") isterse "stockUpdates" dizisini kullan. 
    - Örneğin "5 adet yumurta ekle" dendiğinde action: "add", name: "Köy Yumurtası" veya "Yumurta", quantity: "5 Adet" olmalıdır.
-   - Örneğin "Sütü çıkar/sil" dendiğinde action: "remove", name: "Yarım Yağlı Süt" veya "Süt" olmalıdır.
+   - Örneğin "süt tükendi", "sütü çıkar", "süt bitti" dendiğinde action: "update" veya "remove" ile "isMissing": true olmalıdır.
    - Mutfak kategorileri şunlardan biri olmalıdır: 'Temizlik', 'Bakliyat', 'İçecek', 'Kahvaltılık', 'Et', 'Sebze', 'Meyve', 'Dondurulmuş', 'Atıştırmalık'.
-5. Kullanıcıya sesli asistan gibi sıcak ve net bir dille yanıt ("reply") ver.
+5. Kullanıcıya sesli asistan gibi sıcak, kibar, samimi ve net bir dille yanıt ("reply") ver.
 
 SADECE VE SADECE aşağıdaki JSON şemasına uygun çıktı üret. Çıktı geçerli bir JSON olmalıdır:
 {
-  "reply": "Kullanıcıya söylenecek doğal cevap metni (Türkçe veya İngilizce)",
+  "reply": "Kullanıcıya söylenecek doğal cevap metni",
   "deviceUpdates": [
     { "id": "değişecek cihaz ID'si", "isOn": true/false (isteğe bağlı), "value": "yeni değeri örn. 22 veya 'Şarj Oluyor' (isteğe bağlı)" }
   ],
@@ -650,24 +707,88 @@ SADECE VE SADECE aşağıdaki JSON şemasına uygun çıktı üret. Çıktı ge�
   `;
 
   try {
-    const formattedHistory = (history || []).slice(-6).map((h: any) => {
-      return `${h.role === 'user' ? 'Kullanıcı' : 'Sekreter'}: ${h.text}`;
-    }).join('\n');
+    let contentsPayload: any;
 
-    const prompt = `
+    if (audio) {
+      contentsPayload = [
+        {
+          role: 'user',
+          parts: [
+            {
+              inlineData: {
+                mimeType: mimeType || 'audio/webm',
+                data: audio
+              }
+            },
+            {
+              text: `Kullanıcının bu ses kaydındaki komutunu veya sorusunu dinle ve anla. Onu en uygun şekilde akıllı ev asistanı olarak cevapla. ${detectedLanguage === 'tr' ? 'Lütfen Türkçe cevap ver.' : 'Please answer in English.'} Lütfen sadece belirtilen JSON formatında yanıt ver.`
+            }
+          ]
+        }
+      ];
+    } else {
+      const formattedHistory = (history || []).slice(-6).map((h: any) => {
+        return `${h.role === 'user' ? 'Kullanıcı' : 'Sekreter'}: ${h.text}`;
+      }).join('\n');
+
+      const prompt = `
+Sistem Durumları ve Kurallar:
+- Dil Tercihi: ${detectedLanguage === 'tr' ? 'Türkçe (TR)' : 'İngilizce (EN)'}
+- Lütfen kesinlikle ${detectedLanguage === 'tr' ? 'TÜRKÇE' : 'ENGLISH'} dilinde yanıt ver. Asla İngilizce kelimelerle karışık Türkçe veya Türkçe kelimelerle karışık İngilizce cevap verme.
+
 Konuşma Geçmişi:
 ${formattedHistory}
 
 Kullanıcının Son Komutu: "${command}"
 
 Lütfen JSON formatında yanıt ver.`;
+      contentsPayload = prompt;
+    }
 
     const response = await generateContentWithRetry(ai, {
       model: 'gemini-3.5-flash',
-      contents: prompt,
+      contents: contentsPayload,
       config: {
         systemInstruction: systemContext,
         responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            reply: {
+              type: Type.STRING,
+              description: 'Kullanıcıya söylenecek sıcak ve kibar doğal cevap metni (dil tercihine göre Türkçe veya İngilizce).'
+            },
+            deviceUpdates: {
+              type: Type.ARRAY,
+              description: 'Güncellenmesi gereken akıllı ev cihazlarının listesi',
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING, description: 'Cihaz IDsi' },
+                  isOn: { type: Type.BOOLEAN, description: 'Cihazın açık/kapalı durumu' },
+                  value: { type: Type.STRING, description: 'Cihazın yeni değeri (sıcaklık, parlaklık, vb.)' }
+                },
+                required: ['id']
+              }
+            },
+            stockUpdates: {
+              type: Type.ARRAY,
+              description: 'Güncellenmesi veya eklenmesi/silinmesi gereken mutfak stoklarının listesi',
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  action: { type: Type.STRING, description: 'Yapılacak eylem: "add", "remove" veya "update"' },
+                  name: { type: Type.STRING, description: 'Ürün adı' },
+                  quantity: { type: Type.STRING, description: 'Miktar veya birim bilgisi' },
+                  category: { type: Type.STRING, description: 'Ürün kategorisi' },
+                  isMissing: { type: Type.BOOLEAN, description: 'Eğer ürün tükendiyse/eksikse true' }
+                },
+                required: ['action', 'name']
+              }
+            }
+          },
+          required: ['reply']
+        },
         temperature: 0.7
       }
     });
@@ -706,14 +827,17 @@ Lütfen JSON formatında yanıt ver.`;
           up.name.toLowerCase().includes(k.name.toLowerCase())
         );
 
-        if (up.action === 'remove') {
+        if (up.action === 'remove' || up.isMissing === true) {
           if (itemIndex !== -1) {
-            kitchenItems.splice(itemIndex, 1);
+            // Mark missing instead of deletion, so it stays on the shopping list!
+            kitchenItems[itemIndex].isMissing = true;
           }
         } else if (up.action === 'add' || up.action === 'update') {
           if (itemIndex !== -1) {
-            if (up.quantity !== undefined) {
+            if (up.quantity !== undefined && up.quantity !== null) {
               kitchenItems[itemIndex].quantity = up.quantity;
+            } else if (!kitchenItems[itemIndex].quantity) {
+              kitchenItems[itemIndex].quantity = '1 Adet';
             }
             if (up.category) {
               kitchenItems[itemIndex].category = up.category;
@@ -729,7 +853,7 @@ Lütfen JSON formatında yanıt ver.`;
             });
           }
         } else {
-          // Fallback legacy support
+          // Fallback support
           if (itemIndex !== -1) {
             if (up.isMissing !== undefined) {
               kitchenItems[itemIndex].isMissing = up.isMissing;
@@ -759,6 +883,15 @@ Lütfen JSON formatında yanıt ver.`;
 
   } catch (error: any) {
     console.error('Gemini API Error (Initiating fallback):', error);
+    if (audio) {
+      return res.json({
+        success: false,
+        reply: detectedLanguage === 'tr'
+          ? 'Ses kaydı işlenirken hata oluştu. Lütfen yazarak deneyin.'
+          : 'An error occurred while processing the audio. Please try typing.'
+      });
+    }
+
     // Silent failover to Local Heuristic Parser!
     const fallbackParsed = localHeuristicParser(command, detectedLanguage);
     
@@ -776,12 +909,18 @@ Lütfen JSON formatında yanıt ver.`;
 
     if (fallbackParsed.stockUpdates && Array.isArray(fallbackParsed.stockUpdates)) {
       fallbackParsed.stockUpdates.forEach((up: any) => {
-        const itemIndex = kitchenItems.findIndex(k => k.name.toLowerCase() === up.name.toLowerCase());
-        if (up.action === 'remove' && itemIndex !== -1) {
-          kitchenItems.splice(itemIndex, 1);
+        const itemIndex = kitchenItems.findIndex(k => 
+          k.name.toLowerCase() === up.name.toLowerCase() ||
+          k.name.toLowerCase().includes(up.name.toLowerCase()) ||
+          up.name.toLowerCase().includes(k.name.toLowerCase())
+        );
+        if (up.action === 'remove') {
+          if (itemIndex !== -1) {
+            kitchenItems[itemIndex].isMissing = true;
+          }
         } else if (up.action === 'add') {
           if (itemIndex !== -1) {
-            kitchenItems[itemIndex].quantity = up.quantity;
+            if (up.quantity) kitchenItems[itemIndex].quantity = up.quantity;
             kitchenItems[itemIndex].isMissing = false;
           } else {
             kitchenItems.push({

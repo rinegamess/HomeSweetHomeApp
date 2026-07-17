@@ -41,6 +41,12 @@ export default function VoiceAssistant({
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
 
+  // MediaRecorder states for fallback on iPad/iOS
+  const [isRecordingAudio, setIsRecordingAudio] = useState(false);
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recorderStreamRef = useRef<MediaStream | null>(null);
+
   // Web Speech API Ref
   const recognitionRef = useRef<any>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
@@ -85,13 +91,153 @@ export default function VoiceAssistant({
     }
   };
 
+  // MediaRecorder start/stop helpers
+  const startAudioRecording = async () => {
+    try {
+      setMicError(null);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recorderStreamRef.current = stream;
+      audioChunksRef.current = [];
+      
+      let options = {};
+      if (MediaRecorder.isTypeSupported('audio/webm')) {
+        options = { mimeType: 'audio/webm' };
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        options = { mimeType: 'audio/mp4' };
+      }
+      
+      const recorder = new MediaRecorder(stream, options);
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+      
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType });
+        if (recorderStreamRef.current) {
+          recorderStreamRef.current.getTracks().forEach(track => track.stop());
+        }
+        
+        setIsAiProcessing(true);
+        try {
+          const reader = new FileReader();
+          reader.readAsDataURL(audioBlob);
+          reader.onloadend = async () => {
+            const base64Data = (reader.result as string).split(',')[1];
+            await handleSendAudioCommand(base64Data, recorder.mimeType);
+          };
+        } catch (err) {
+          console.error("FileReader error:", err);
+          setIsAiProcessing(false);
+        }
+      };
+      
+      setMediaRecorder(recorder);
+      recorder.start();
+      setIsRecordingAudio(true);
+      setIsListening(true);
+      
+      // Auto-stop after 8 seconds
+      setTimeout(() => {
+        if (recorder && recorder.state === 'recording') {
+          recorder.stop();
+          setIsRecordingAudio(false);
+          setIsListening(false);
+        }
+      }, 8000);
+      
+    } catch (err: any) {
+      console.error("MediaRecorder start failed:", err);
+      setMicError(language === 'tr' 
+        ? 'Mikrofon izni alınamadı veya engellendi.' 
+        : 'Microphone permission denied or blocked.');
+    }
+  };
+
+  const stopAudioRecording = () => {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+      setIsRecordingAudio(false);
+      setIsListening(false);
+    }
+  };
+
+  const handleSendAudioCommand = async (base64Audio: string, mimeTypeString: string) => {
+    setIsAiProcessing(true);
+    try {
+      const response = await fetch('/api/ai/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          audio: base64Audio,
+          mimeType: mimeTypeString,
+          language: language,
+          history: chatHistory.map(h => ({ role: h.role, text: h.text }))
+        })
+      });
+
+      const data = await response.json();
+      setIsAiProcessing(false);
+
+      if (data.success) {
+        setChatHistory(prev => [
+          ...prev, 
+          {
+            id: `msg-voice-${Date.now()}`,
+            role: 'user',
+            text: language === 'tr' ? '🎤 Ses Komutu Gönderildi' : '🎤 Voice Command Sent',
+            timestamp: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+          },
+          {
+            id: `msg-ai-${Date.now()}`,
+            role: 'assistant',
+            text: data.reply,
+            timestamp: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+          }
+        ]);
+
+        speakText(data.reply);
+
+        onVoiceCommandSuccess({
+          deviceUpdates: data.deviceUpdates || [],
+          stockUpdates: data.stockUpdates || []
+        });
+
+        onAddNotification({
+          title: 'Sekreter AI İşlemi',
+          message: data.reply,
+          type: 'success'
+        });
+      } else {
+        throw new Error(data.reply || 'Voice command parsing failed');
+      }
+    } catch (err: any) {
+      setIsAiProcessing(false);
+      console.error("Audio Command Error:", err);
+      const errReply = language === 'tr'
+        ? 'Ses kaydı gönderildi ancak asistan tarafından çözümlenemedi.'
+        : 'Audio was sent but assistant failed to transcribe/process it.';
+      setChatHistory(prev => [...prev, {
+        id: `msg-err-${Date.now()}`,
+        role: 'assistant',
+        text: errReply,
+        timestamp: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+      }]);
+      speakText(errReply);
+    }
+  };
+
   // Toggle continuous mic listening / dynamic mobile recognition
   const toggleMic = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setMicError(language === 'tr'
-        ? 'Bu tarayıcıda ses tanıma desteklenmiyor.'
-        : 'Speech recognition is not supported in this browser.');
+      // Bypassing Web Speech API restriction by falling back to MediaRecorder audio transmission!
+      if (isRecordingAudio) {
+        stopAudioRecording();
+      } else {
+        startAudioRecording();
+      }
       return;
     }
 
@@ -219,6 +365,7 @@ export default function VoiceAssistant({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           command: commandString,
+          language: language,
           history: chatHistory.map(h => ({ role: h.role, text: h.text }))
         })
       });
@@ -277,7 +424,32 @@ export default function VoiceAssistant({
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start h-[calc(100vh-140px)]">
       
       {/* LEFT COLUMN: Visual Orb & Mic control */}
-      <div className="lg:col-span-5 p-6 rounded-3xl bg-white dark:bg-polish-dark-card border border-slate-200/60 dark:border-slate-800/80 shadow-xs flex flex-col items-center justify-between h-full">
+      <div className="lg:col-span-5 p-6 rounded-3xl bg-white dark:bg-polish-dark-card border border-slate-200/60 dark:border-slate-800/80 shadow-xs flex flex-col items-center justify-between h-full relative">
+        {/* Top-Right Absolute Volume Switch */}
+        <div className="absolute top-4 right-4 z-20">
+          <button
+            onClick={() => {
+              const nextVal = !isTtsEnabled;
+              setIsTtsEnabled(nextVal);
+              if (!nextVal) {
+                try {
+                  window.speechSynthesis.cancel();
+                } catch (e) {
+                  console.error(e);
+                }
+              }
+            }}
+            className={`p-2.5 rounded-xl cursor-pointer border transition-all hover:scale-105 shadow-xs ${
+              isTtsEnabled
+                ? 'bg-emerald-50 dark:bg-emerald-950/25 border-emerald-200 dark:border-emerald-900/40 text-emerald-600 dark:text-emerald-400'
+                : 'bg-rose-50 dark:bg-rose-950/25 border-rose-200 dark:border-rose-900/40 text-rose-500 dark:text-rose-400'
+            }`}
+            title={isTtsEnabled ? (language === 'tr' ? 'Sesi Sessize Al' : 'Mute Speech') : (language === 'tr' ? 'Sesi Aç' : 'Unmute Speech')}
+          >
+            {isTtsEnabled ? <Volume2 className="w-4 h-4 animate-pulse" /> : <VolumeX className="w-4 h-4" />}
+          </button>
+        </div>
+
         <div className="w-full text-center space-y-1">
           <span className="px-3 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 font-bold text-[10px] uppercase tracking-wider font-sans">
             Continuous Wake Word Console
@@ -345,21 +517,24 @@ export default function VoiceAssistant({
           </div>
 
           {micError && (
-            <div className="text-[10px] font-semibold text-rose-500 bg-rose-50 dark:bg-rose-950/20 px-4 py-2.5 rounded-2xl text-center border border-rose-100/50 dark:border-rose-900/30 max-w-xs space-y-1">
+            <div className="text-[10px] font-semibold text-rose-500 bg-rose-50 dark:bg-rose-950/20 px-4 py-2.5 rounded-2xl text-center border border-rose-100/50 dark:border-rose-900/30 max-w-xs">
               <p>{micError}</p>
-              {/iPhone|iPad|iPod/i.test(navigator.userAgent) && (
-                <p className="text-[9px] text-slate-500 dark:text-slate-400 font-medium leading-relaxed">
-                  {language === 'tr'
-                    ? '💡 iPad/iOS üzerinde mikrofon izinleri iframe içinde kısıtlıdır. Sesi kullanmak için sağ üstteki "Yeni Sekmede Aç" butonu ile uygulamayı açın.'
-                    : '💡 On iPad/iOS, microphone use is restricted inside frames. Click "Open in New Tab" at the top-right to run the app in a standalone window.'}
-                </p>
-              )}
             </div>
           )}
 
           {/* Voice Output synthesis Toggle */}
           <button
-            onClick={() => setIsTtsEnabled(!isTtsEnabled)}
+            onClick={() => {
+              const nextVal = !isTtsEnabled;
+              setIsTtsEnabled(nextVal);
+              if (!nextVal) {
+                try {
+                  window.speechSynthesis.cancel();
+                } catch (e) {
+                  console.error(e);
+                }
+              }
+            }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold border transition-all ${
               isTtsEnabled
                 ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 text-emerald-600 dark:text-emerald-400'

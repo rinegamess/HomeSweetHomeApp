@@ -34,7 +34,7 @@ export default function Sidebar({
   return (
     <>
       {/* Mobile Menu Hamburger Button */}
-      <div className="md:hidden fixed top-4 left-4 z-40">
+      <div className="md:hidden fixed top-4 left-4 z-45">
         <button
           onClick={() => setIsOpen(!isOpen)}
           className="p-2.5 rounded-xl bg-white dark:bg-polish-dark-card text-slate-800 dark:text-white border border-slate-200/50 dark:border-slate-800/80 shadow-md cursor-pointer hover:scale-105 transition-all"
@@ -45,7 +45,7 @@ export default function Sidebar({
 
       {/* Sidebar Layout */}
       <aside
-        className={`fixed md:sticky top-0 left-0 z-30 h-screen w-72 bg-white dark:bg-polish-dark-sidebar text-slate-800 dark:text-slate-100 flex flex-col justify-between border-r border-slate-200/60 dark:border-slate-800/60 transition-all duration-300 transform ${
+        className={`fixed md:sticky top-0 left-0 z-50 h-screen w-72 bg-white dark:bg-polish-dark-sidebar text-slate-800 dark:text-slate-100 flex flex-col justify-between border-r border-slate-200/60 dark:border-slate-800/60 transition-all duration-300 transform ${
           isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         }`}
       >
@@ -131,7 +131,7 @@ export default function Sidebar({
       {isOpen && (
         <div
           onClick={() => setIsOpen(false)}
-          className="md:hidden fixed inset-0 z-20 bg-black/60 backdrop-blur-xs transition-opacity duration-300"
+          className="md:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-xs transition-opacity duration-300"
         ></div>
       )}
     </>
