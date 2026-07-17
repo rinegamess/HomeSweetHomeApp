@@ -654,7 +654,7 @@ export default function DevicesView({
 
                     {/* Sensor or other readout value */}
                     {!['bulb', 'led_controller', 'air_conditioner', 'speaker'].includes(device.type) && (
-                      device.value === 1 || device.value === '1' || (device.value as unknown) === true || device.type === 'socket' || device.value === undefined ? (
+                      device.value === 1 || device.value === '1' || String(device.value) === '1' || String(device.value).toLowerCase() === 'aktif' || String(device.value).toLowerCase() === 'açık' || device.type === 'socket' || device.value === undefined ? (
                         <p className="text-[11px] text-slate-400 italic text-center py-1">
                           {language === 'tr' ? 'Cihaz aktif (açık) durumda.' : 'Device is currently powered on.'}
                         </p>

@@ -4,9 +4,100 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
-import { Device, KitchenItem, Automation, NotificationItem, PlatformConnection } from './src/types.js';
+import { Device, KitchenItem, Automation, NotificationItem, PlatformConnection, DeviceType } from './src/types.js';
 
 dotenv.config();
+
+// Local Area Network (LAN) Direct Integrations (Tapo, Shelly, Tasmota, and REST)
+import { loginDeviceByIp } from 'tp-link-tapo-connect';
+import net from 'net';
+
+let googleHomeConfig = {
+  clientId: '',
+  clientSecret: '',
+  refreshToken: '',
+  projectId: '',
+  connected: false
+};
+
+let localConfig = {
+  tapoEmail: process.env.TAPO_EMAIL || '',
+  tapoPassword: process.env.TAPO_PASSWORD || '',
+  pingTimeoutMs: 1000,
+  connected: true
+};
+
+// Direct socket verification for smart devices on LAN (Presence detection)
+async function checkTcpPort(ip: string, port: number, timeout: number = 800): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let resolved = false;
+    socket.setTimeout(timeout);
+    
+    socket.on('connect', () => {
+      if (!resolved) { resolve(true); resolved = true; }
+      socket.destroy();
+    });
+    
+    socket.on('timeout', () => {
+      if (!resolved) { resolve(false); resolved = true; }
+      socket.destroy();
+    });
+    
+    socket.on('error', () => {
+      if (!resolved) { resolve(false); resolved = true; }
+      socket.destroy();
+    });
+    
+    socket.connect(port, ip);
+  });
+}
+
+// Scans typical ports of local smart plugs/lights to check if they're reachable
+async function checkDeviceOnline(ip: string): Promise<boolean> {
+  // Common local smart home ports: 80 (Shelly/Tasmota/HTTP), 8339 (Tapo), 6668 (Tuya), 443 (HTTPS), 554 (RTSP camera)
+  const ports = [80, 8339, 6668, 443, 554];
+  for (const port of ports) {
+    try {
+      const ok = await checkTcpPort(ip, port, 700);
+      if (ok) return true;
+    } catch {
+      // Continue to next port
+    }
+  }
+  return false;
+}
+
+// Scans all devices that have an IP Address configured to update their online/offline state
+async function runLocalPresenceCheck(): Promise<{ success: boolean; deviceCount: number; log: string }> {
+  let checkedCount = 0;
+  let onlineCount = 0;
+  for (const device of devices) {
+    if (device.ipAddress) {
+      checkedCount++;
+      const isOnline = await checkDeviceOnline(device.ipAddress);
+      if (device.isOnline !== isOnline) {
+        device.isOnline = isOnline;
+        device.lastActive = isOnline ? 'Şimdi (Ağda Algılandı)' : 'Çevrimdışı (Ağda Bulunamadı)';
+      }
+      if (isOnline) {
+        onlineCount++;
+      }
+    }
+  }
+  saveState();
+  return {
+    success: true,
+    deviceCount: checkedCount,
+    log: `Yerel ağdaki ${checkedCount} adet IP'li cihaz tarandı. ${onlineCount} tanesi aktif olarak tespit edildi.`
+  };
+}
+
+// Run direct status check in the background every 40 seconds
+setInterval(() => {
+  runLocalPresenceCheck().catch(err => console.error('[LAN Presence Check Background Error]:', err));
+}, 40000);
+
 
 const app = express();
 app.use(express.json());
@@ -32,7 +123,6 @@ const DEFAULT_DEVICES: Device[] = [
   { id: 'dev-13', name: 'Salon Sıcaklık Sensörü', type: 'temperature_sensor', room: 'Salon', isOnline: true, isOn: true, batteryLevel: 90, lastActive: 'Sürekli Aktif', automationEnabled: true, value: 24 },
   { id: 'dev-14', name: 'Yatak Odası Nem Sensörü', type: 'humidity_sensor', room: 'Yatak Odası', isOnline: true, isOn: true, batteryLevel: 91, lastActive: 'Sürekli Aktif', automationEnabled: true, value: 55 },
   { id: 'dev-15', name: 'Bahçe Akıllı Projektör', type: 'bulb', room: 'Bahçe', isOnline: true, isOn: false, energyConsumption: 0.18, lastActive: 'Dün 22:00', automationEnabled: true },
-  { id: 'dev-tapo-p100', name: 'Tapo P100 Akıllı Priz', type: 'socket', room: 'Salon', isOnline: true, isOn: false, energyConsumption: 0.12, lastActive: 'Şimdi', automationEnabled: true, ipAddress: '192.168.1.105', brand: 'Tapo', model: 'P100' },
 ];
 
 const DEFAULT_KITCHEN_ITEMS: KitchenItem[] = [
@@ -86,27 +176,16 @@ function loadState() {
       const fileData = fs.readFileSync(DATA_FILE, 'utf8');
       const parsed = JSON.parse(fileData);
       devices = parsed.devices || DEFAULT_DEVICES;
-      const hasTapo = devices.some(d => d.id === 'dev-tapo-p100' || (d.brand === 'Tapo' && d.model === 'P100'));
-      if (!hasTapo) {
-        devices.push({
-          id: 'dev-tapo-p100',
-          name: 'Tapo P100 Akıllı Priz',
-          type: 'socket',
-          room: 'Salon',
-          isOnline: true,
-          isOn: false,
-          energyConsumption: 0.12,
-          lastActive: 'Şimdi',
-          automationEnabled: true,
-          ipAddress: '192.168.1.105',
-          brand: 'Tapo',
-          model: 'P100'
-        });
-      }
       kitchenItems = parsed.kitchenItems || DEFAULT_KITCHEN_ITEMS;
       automations = parsed.automations || DEFAULT_AUTOMATIONS;
       notifications = parsed.notifications || DEFAULT_NOTIFICATIONS;
       platforms = parsed.platforms || DEFAULT_PLATFORMS;
+      if (parsed.googleHomeConfig) {
+        googleHomeConfig = { ...googleHomeConfig, ...parsed.googleHomeConfig };
+      }
+      if (parsed.localConfig) {
+        localConfig = { ...localConfig, ...parsed.localConfig };
+      }
       console.log('[Persistence] Loaded smart home state from smarthome_db.json');
     } else {
       devices = [...DEFAULT_DEVICES];
@@ -134,7 +213,9 @@ function saveState() {
       kitchenItems,
       automations,
       notifications,
-      platforms
+      platforms,
+      googleHomeConfig,
+      localConfig
     };
     fs.writeFileSync(DATA_FILE, JSON.stringify(dataToSave, null, 2), 'utf8');
   } catch (err) {
@@ -174,7 +255,7 @@ function getAi(): GoogleGenAI | null {
 }
 
 // REST API GET Endpoints
-app.get('/api/devices', (req, res) => {
+app.get('/api/devices', async (req, res) => {
   res.json(devices);
 });
 
@@ -198,13 +279,85 @@ app.get('/api/weather', (req, res) => {
   res.json(weatherData);
 });
 
-// REST API MUTATIONS
-app.post('/api/devices/toggle', (req, res) => {
+// REST API MUTATIONS WITH LAN INTEGRATION
+app.post('/api/devices/toggle', async (req, res) => {
   const { id } = req.body;
   const device = devices.find(d => d.id === id);
   if (device) {
     device.isOn = !device.isOn;
     device.lastActive = 'Şimdi';
+
+    if (device.ipAddress) {
+      const ip = device.ipAddress;
+      const brandLower = device.brand ? device.brand.toLowerCase() : '';
+      console.log(`[LAN Control] Toggling physical device ${device.name} at IP ${ip} (Brand: ${device.brand || 'REST'}) to ${device.isOn ? 'ON' : 'OFF'}`);
+      
+      try {
+        if (brandLower === 'tapo') {
+          if (localConfig.tapoEmail && localConfig.tapoPassword) {
+            try {
+              const session = await loginDeviceByIp(localConfig.tapoEmail, localConfig.tapoPassword, ip);
+              if (device.isOn) {
+                await session.turnOn();
+              } else {
+                await session.turnOff();
+              }
+              device.lastActive = 'Şimdi (Tapo Yerel)';
+              console.log(`[LAN Tapo] Successfully controlled Tapo at ${ip}`);
+            } catch (err: any) {
+              console.warn(`[LAN Tapo Control Warning] Network unreachable (expected if in cloud sandbox): ${err.message}`);
+              device.lastActive = 'Şimdi (Yerel Başarısız - Sanal Değişti)';
+            }
+          } else {
+            device.lastActive = 'Şimdi (Tapo Şifresi Yok)';
+          }
+        } else if (brandLower === 'shelly') {
+          const onStr = device.isOn ? 'on' : 'off';
+          const onBool = device.isOn;
+          try {
+            // Shelly Gen 1 REST API
+            await fetch(`http://${ip}/relay/0?turn=${onStr}`, { method: 'GET', signal: AbortSignal.timeout(1000) });
+            device.lastActive = 'Şimdi (Shelly G1 Yerel)';
+          } catch {
+            try {
+              // Shelly Gen 2 RPC API
+              await fetch(`http://${ip}/rpc/Switch.Set?id=0&on=${onBool}`, { method: 'GET', signal: AbortSignal.timeout(1000) });
+              device.lastActive = 'Şimdi (Shelly G2 Yerel)';
+            } catch (err2: any) {
+              console.warn(`[LAN Shelly Control Warning] Shelly failed: ${err2.message}`);
+              device.lastActive = 'Şimdi (Yerel Başarısız - Sanal Değişti)';
+            }
+          }
+        } else if (brandLower === 'tasmota' || brandLower === 'sonoff') {
+          const cmdStr = device.isOn ? 'ON' : 'OFF';
+          try {
+            await fetch(`http://${ip}/cm?cmnd=Power%20${cmdStr}`, { method: 'GET', signal: AbortSignal.timeout(1000) });
+            device.lastActive = 'Şimdi (Tasmota Yerel)';
+          } catch (err: any) {
+            console.warn(`[LAN Tasmota Control Warning] Tasmota failed: ${err.message}`);
+            device.lastActive = 'Şimdi (Yerel Başarısız - Sanal Değişti)';
+          }
+        } else {
+          // Generic local endpoint or REST control (supports Tasmota/WLED/DIY ESP8266 or similar)
+          const actionPath = device.isOn ? 'on' : 'off';
+          try {
+            await fetch(`http://${ip}/${actionPath}`, { method: 'GET', signal: AbortSignal.timeout(1000) });
+            device.lastActive = 'Şimdi (REST Yerel)';
+          } catch {
+            try {
+              await fetch(`http://${ip}/toggle`, { method: 'POST', signal: AbortSignal.timeout(1000) });
+              device.lastActive = 'Şimdi (REST Toggle Yerel)';
+            } catch (err: any) {
+              console.log(`[LAN Generic REST Info] Generic REST request completed or failed: ${err.message}`);
+              device.lastActive = 'Şimdi (Ağ/IP)';
+            }
+          }
+        }
+      } catch (err: any) {
+        console.error('[LAN Control Global Error]:', err.message);
+      }
+    }
+
     saveState();
     res.json({ success: true, device });
   } else {
@@ -942,6 +1095,275 @@ Lütfen JSON formatında yanıt ver.`;
       deviceUpdates: fallbackParsed.deviceUpdates,
       stockUpdates: fallbackParsed.stockUpdates
     });
+  }
+});
+
+// Local Network Integration REST API Endpoints
+app.get('/api/local-lan/config', (req, res) => {
+  res.json({
+    tapoEmail: localConfig.tapoEmail,
+    tapoPassword: localConfig.tapoPassword ? '••••••••' : '',
+    pingTimeoutMs: localConfig.pingTimeoutMs,
+    connected: localConfig.connected
+  });
+});
+
+app.post('/api/local-lan/config', (req, res) => {
+  const { tapoEmail, tapoPassword, pingTimeoutMs, connected } = req.body;
+  
+  if (tapoEmail !== undefined) localConfig.tapoEmail = tapoEmail;
+  if (tapoPassword !== undefined && !tapoPassword.includes('••••')) {
+    localConfig.tapoPassword = tapoPassword;
+  }
+  if (pingTimeoutMs !== undefined) localConfig.pingTimeoutMs = pingTimeoutMs;
+  if (connected !== undefined) {
+    localConfig.connected = connected;
+    const platform = platforms.find(p => p.type === 'local');
+    if (platform) {
+      platform.connected = connected;
+    }
+  }
+  
+  saveState();
+  res.json({
+    success: true,
+    config: {
+      tapoEmail: localConfig.tapoEmail,
+      tapoPassword: localConfig.tapoPassword ? '••••••••' : '',
+      pingTimeoutMs: localConfig.pingTimeoutMs,
+      connected: localConfig.connected
+    }
+  });
+});
+
+app.post('/api/local-lan/scan', async (req, res) => {
+  const result = await runLocalPresenceCheck();
+  res.json(result);
+});
+
+// Free/Smart Text-based Import for Local LAN IP-based devices!
+app.post('/api/local-lan/import-text', async (req, res) => {
+  const { text, language } = req.body;
+  if (!text || text.trim().length === 0) {
+    return res.status(400).json({ success: false, error: 'Text content is required' });
+  }
+
+  const currentLanguage = language || 'tr';
+  const ai = getAi();
+  let importedDevices: Device[] = [];
+
+  if (!ai) {
+    // Fallback heuristic parser for offline compatibility or when API key is missing
+    const lines = text.split(/[\n;]+/).map((l: string) => l.trim()).filter((l: string) => l.length > 2);
+    lines.forEach((line: string, idx: number) => {
+      const lower = line.toLowerCase();
+      let type: DeviceType = 'bulb';
+      let room = 'Salon';
+      let brand: string | undefined = undefined;
+      let ipAddress: string | undefined = undefined;
+
+      // Extract IP address if present
+      const ipMatch = line.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);
+      if (ipMatch) {
+        ipAddress = ipMatch[1];
+      }
+
+      if (lower.includes('mutfak') || lower.includes('kitchen')) room = 'Mutfak';
+      else if (lower.includes('yatak') || lower.includes('bedroom')) room = 'Yatak Odası';
+      else if (lower.includes('banyo') || lower.includes('bath')) room = 'Banyo';
+      else if (lower.includes('bahçe') || lower.includes('garden')) room = 'Bahçe';
+      else if (lower.includes('koridor') || lower.includes('hall')) room = 'Koridor';
+
+      if (lower.includes('tapo')) brand = 'Tapo';
+      else if (lower.includes('shelly')) brand = 'Shelly';
+      else if (lower.includes('tasmota') || lower.includes('sonoff')) brand = 'Tasmota';
+
+      if (lower.includes('priz') || lower.includes('soket') || lower.includes('plug')) type = 'socket';
+      else if (lower.includes('klima') || lower.includes('ac') || lower.includes('air cond')) type = 'air_conditioner';
+      else if (lower.includes('led') || lower.includes('şerit')) type = 'led_controller';
+      else if (lower.includes('süpürge') || lower.includes('vacuum') || lower.includes('robot')) type = 'robot_vacuum';
+      else if (lower.includes('tv') || lower.includes('televizyon')) type = 'tv';
+      else if (lower.includes('hoparlör') || lower.includes('speaker') || lower.includes('ses')) type = 'speaker';
+      else if (lower.includes('perde') || lower.includes('stor') || lower.includes('curtain')) type = 'curtains';
+      else if (lower.includes('temizleyici') || lower.includes('purifier')) type = 'air_purifier';
+      else if (lower.includes('fan') || lower.includes('vantilatör')) type = 'fan';
+      else if (lower.includes('kamera') || lower.includes('camera')) type = 'camera';
+      else if (lower.includes('kapı') || lower.includes('pencere') || lower.includes('sensör') || lower.includes('sensor')) type = 'door_sensor';
+
+      const isSensor = type.includes('sensor');
+      importedDevices.push({
+        id: `imported-${Date.now()}-${idx}`,
+        name: line.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/, '').replace(/(tapo|shelly|tasmota|sonoff)/gi, '').replace(/[,;\-\(\)]/g, ' ').replace(/\s+/g, ' ').trim() || 'Akıllı Cihaz',
+        type,
+        room,
+        isOnline: true,
+        isOn: false,
+        lastActive: 'Metinden Aktarıldı',
+        automationEnabled: false,
+        value: isSensor ? ((type as string) === 'temperature_sensor' ? 24 : (type as string) === 'humidity_sensor' ? 55 : 'Kapalı') : (type === 'bulb' ? 75 : undefined),
+        brand: brand,
+        ipAddress: ipAddress
+      });
+    });
+
+    devices.push(...importedDevices);
+    saveState();
+    return res.json({
+      success: true,
+      importedCount: importedDevices.length,
+      devices: importedDevices,
+      log: `${importedDevices.length} adet cihaz yerel analiz yöntemiyle başarıyla eklenmiştir!`
+    });
+  }
+
+  try {
+    const prompt = `
+      Sen akıllı ev asistanı entegrasyon arayüzüsün. Kullanıcı yerel ağındaki (LAN) akıllı cihazların listesini, IP adreslerini veya el yazısı metnini gönderdi.
+      Kullanıcı metni: "${text}"
+      
+      Görevin:
+      Bu metindeki tüm akıllı ev cihazlarını tespit et. Her birini geçerli birer "Device" nesnesi olarak ayrıştır.
+      Cihaz türü ("type") KESİNLİKLE şu değerlerden biri olmalıdır:
+      'socket' (priz, anahtar), 'bulb' (lamba, ampul, projektör), 'led_controller' (led şeritler), 'air_purifier' (hava temizleyici), 'robot_vacuum' (robot süpürge), 'air_conditioner' (klima), 'fan' (vantilatör, fan), 'door_sensor' (kapı, pencere sensörü), 'water_sensor' (su sensörü), 'humidity_sensor' (nem sensörü), 'temperature_sensor' (sıcaklık sensörü), 'curtains' (perde, stor), 'camera' (kamera), 'tv' (televizyon), 'speaker' (hoparlör, ses sistemi).
+      
+      Metinde geçen IP adreslerini (örn: 192.168.1.200) doğru bir şekilde tespit edip "ipAddress" alanına ata.
+      Her cihaz için oda ismini ("room") türkçe olarak belirle (örn: 'Salon', 'Mutfak', 'Yatak Odası', 'Koridor', 'Banyo', 'Bahçe'). Eğer bulunamazsa 'Salon' yap.
+      Markaları (Tapo, Shelly, Tasmota, Sonoff vb.) ve modelleri algıla.
+      
+      Cevap formatın sadece şu şemada JSON olmalıdır:
+      {
+        "devices": [
+          {
+            "name": "Cihazın Adı (örn: Mutfak Lambası, Akıllı Priz)",
+            "type": "Yukarıda belirtilen geçerli türlerden biri",
+            "room": "Belirlenen oda ismi",
+            "ipAddress": "Varsa IP adresi (örn: 192.168.1.100)",
+            "brand": "Varsa markası (örn: Tapo, Shelly, Tasmota, Sonoff vb.)",
+            "model": "Varsa modeli"
+          }
+        ]
+      }
+    `;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.5-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json'
+      }
+    });
+
+    const textResult = response.text || '{"devices":[]}';
+    const parsed = JSON.parse(textResult.trim());
+    const rawList = parsed.devices || [];
+
+    rawList.forEach((rawDev: any, idx: number) => {
+      const type = rawDev.type || 'bulb';
+      const isSensor = type.includes('sensor');
+      const newDev: Device = {
+        id: `imported-${Date.now()}-${idx}-${Math.floor(Math.random() * 1000)}`,
+        name: rawDev.name || 'Bilinmeyen Cihaz',
+        type: type,
+        room: rawDev.room || 'Salon',
+        isOnline: true,
+        isOn: false,
+        lastActive: 'LAN Metin Aktarımı',
+        automationEnabled: false,
+        value: isSensor ? (type === 'temperature_sensor' ? 24 : type === 'humidity_sensor' ? 55 : 'Kapalı') : (type === 'bulb' ? 75 : undefined),
+        brand: rawDev.brand || undefined,
+        model: rawDev.model || undefined,
+        ipAddress: rawDev.ipAddress || undefined
+      };
+      importedDevices.push(newDev);
+    });
+
+    if (importedDevices.length > 0) {
+      devices.push(...importedDevices);
+      saveState();
+    }
+
+    res.json({
+      success: true,
+      importedCount: importedDevices.length,
+      devices: importedDevices,
+      log: `${importedDevices.length} adet yerel IP cihazı başarıyla çözümlenip sisteme dahil edilmiştir!`
+    });
+
+  } catch (err: any) {
+    console.error('[Import Text Error]:', err);
+    res.json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/local-lan/command', async (req, res) => {
+  const { command, language } = req.body;
+  if (!command) {
+    return res.status(400).json({ success: false, error: 'Command text is required' });
+  }
+  
+  const currentLanguage = language || 'tr';
+  const ai = getAi();
+  
+  if (!ai) {
+    const parsed = localHeuristicParser(command, currentLanguage);
+    if (parsed.deviceUpdates) {
+      parsed.deviceUpdates.forEach((up: any) => {
+        const d = devices.find(x => x.id === up.id);
+        if (d) {
+          if (up.isOn !== undefined) d.isOn = up.isOn;
+          if (up.value !== undefined) d.value = up.value;
+          d.lastActive = 'Şimdi (Sesle)';
+        }
+      });
+    }
+    saveState();
+    return res.json({ success: true, reply: parsed.reply, deviceUpdates: parsed.deviceUpdates });
+  }
+  
+  try {
+    const prompt = `
+      Sen Yerel Ağ Akıllı Ev Asistanı'sın. Kullanıcı yerel ağındaki (LAN) akıllı cihazları senin üzerinden kontrol ediyor.
+      Şu anda kullanıcının evindeki cihazlar: ${JSON.stringify(devices, null, 2)}.
+      Kullanıcının gönderdiği komut: "${command}".
+      Dil: ${currentLanguage === 'tr' ? 'Türkçe' : 'İngilizce'}.
+      
+      Eğer komut bir cihazı açma, kapatma veya değer ayarlamaya yönelikse bunu anla ve JSON olarak çıktı ver.
+      Cevap formatın sadece şu JSON olmalıdır:
+      {
+        "reply": "Kullanıcıya söylenecek onay metni (örn: 'Tabii, Salon Akıllı Ampulünü açıyorum')",
+        "deviceUpdates": [
+          { "id": "cihaz_id_si", "isOn": true/false, "value": "varsa yeni değeri" }
+        ]
+      }
+    `;
+    
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.5-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json'
+      }
+    });
+    
+    const text = response.text || '{}';
+    const parsed = JSON.parse(text);
+    
+    if (parsed.deviceUpdates && Array.isArray(parsed.deviceUpdates)) {
+      parsed.deviceUpdates.forEach((up: any) => {
+        const d = devices.find(x => x.id === up.id);
+        if (d) {
+          if (up.isOn !== undefined) d.isOn = up.isOn;
+          if (up.value !== undefined) d.value = up.value;
+          d.lastActive = 'Şimdi (Sesle)';
+        }
+      });
+      saveState();
+    }
+    
+    res.json({ success: true, reply: parsed.reply, deviceUpdates: parsed.deviceUpdates });
+  } catch (err: any) {
+    console.error('[LAN Assistant Command Error]:', err);
+    res.json({ success: false, error: err.message });
   }
 });
 
