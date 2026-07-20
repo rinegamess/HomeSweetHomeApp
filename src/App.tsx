@@ -814,8 +814,6 @@ export default function App() {
               {activeView === 'settings' && (
                 <SettingsView
                   language={language}
-                  platforms={platforms}
-                  onTogglePlatform={handleTogglePlatform}
                 />
               )}
 

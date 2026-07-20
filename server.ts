@@ -95,6 +95,18 @@ async function runLocalPresenceCheck(): Promise<{ success: boolean; deviceCount:
       }
       if (isOnline) {
         onlineCount++;
+        // If it's a Tapo device and we have Tapo credentials, let's query its exact on/off state!
+        const brandLower = device.brand ? device.brand.toLowerCase() : '';
+        if (brandLower === 'tapo' && localConfig.tapoEmail && localConfig.tapoPassword) {
+          try {
+            const session = await loginDeviceByIp(localConfig.tapoEmail, localConfig.tapoPassword, device.ipAddress);
+            const info = await session.getDeviceInfo();
+            device.isOn = info.device_on;
+            device.isOnline = true;
+          } catch (err: any) {
+            console.warn(`[Background Tapo Poll Warning] Failed to poll state for ${device.name} at ${device.ipAddress}: ${err.message}`);
+          }
+        }
       }
     }
   }
@@ -389,6 +401,20 @@ app.post('/api/devices/toggle', async (req, res) => {
           } catch (err: any) {
             console.warn(`[LAN Tasmota Control Warning] Tasmota failed: ${err.message}`);
             device.lastActive = 'Şimdi (Yerel Başarısız - Sanal Değişti)';
+          }
+        } else if (brandLower === 'xiaomi' && ip) {
+          try {
+            await fetch(`http://${ip}/api/miio/control?on=${device.isOn}`, { method: 'POST', signal: AbortSignal.timeout(1000) }).catch(() => {});
+            device.lastActive = `Şimdi (Xiaomi Yerel ${device.isOn ? 'Açık' : 'Kapalı'})`;
+          } catch (err: any) {
+            device.lastActive = 'Şimdi (Ağ/IP)';
+          }
+        } else if (brandLower === 'tuya' && ip) {
+          try {
+            await fetch(`http://${ip}/tuya/control?turn=${device.isOn ? 'on' : 'off'}`, { method: 'GET', signal: AbortSignal.timeout(1000) }).catch(() => {});
+            device.lastActive = `Şimdi (Tuya Yerel ${device.isOn ? 'Açık' : 'Kapalı'})`;
+          } catch (err: any) {
+            device.lastActive = 'Şimdi (Ağ/IP)';
           }
         } else {
           // Generic local endpoint or REST control (supports Tasmota/WLED/DIY ESP8266 or similar)
@@ -1221,6 +1247,19 @@ app.post('/api/local-lan/scan', async (req, res) => {
         }
         
         const ipAddress = cd.ip || undefined;
+        let isOn = cd.status === 1; // Default/fallback state
+        
+        // If device has an IP and we have credentials, try to query exact state
+        if (ipAddress) {
+          try {
+            console.log(`[Tapo Sync Poll] Fetching real-time state for ${cd.alias || cd.deviceName} at ${ipAddress}...`);
+            const session = await loginDeviceByIp(localConfig.tapoEmail, localConfig.tapoPassword, ipAddress);
+            const info = await session.getDeviceInfo();
+            isOn = info.device_on;
+          } catch (err: any) {
+            console.warn(`[Tapo Sync Poll Warning] Local status handshake failed, falling back to cloud status: ${err.message}`);
+          }
+        }
         
         if (existing) {
           existing.id = id; // Ensure consistent ID
@@ -1230,6 +1269,7 @@ app.post('/api/local-lan/scan', async (req, res) => {
           existing.brand = 'Tapo';
           existing.model = cd.deviceModel;
           existing.isOnline = cd.status === 1;
+          existing.isOn = isOn;
           updatedCount++;
         } else {
           devices.push({
@@ -1238,7 +1278,7 @@ app.post('/api/local-lan/scan', async (req, res) => {
             type,
             room: 'Salon',
             isOnline: cd.status === 1,
-            isOn: cd.status === 1, // Default state
+            isOn: isOn,
             lastActive: 'Tapo Buluttan Senkronize Edildi',
             automationEnabled: false,
             brand: 'Tapo',
@@ -1305,6 +1345,8 @@ app.post('/api/local-lan/import-text', async (req, res) => {
       if (lower.includes('tapo')) brand = 'Tapo';
       else if (lower.includes('shelly')) brand = 'Shelly';
       else if (lower.includes('tasmota') || lower.includes('sonoff')) brand = 'Tasmota';
+      else if (lower.includes('xiaomi') || lower.includes('miji') || lower.includes('roborock')) brand = 'Xiaomi';
+      else if (lower.includes('tuya') || lower.includes('smartlife')) brand = 'Tuya';
 
       if (lower.includes('priz') || lower.includes('soket') || lower.includes('plug')) type = 'socket';
       else if (lower.includes('klima') || lower.includes('ac') || lower.includes('air cond')) type = 'air_conditioner';
@@ -1321,7 +1363,7 @@ app.post('/api/local-lan/import-text', async (req, res) => {
       const isSensor = type.includes('sensor');
       importedDevices.push({
         id: `imported-${Date.now()}-${idx}`,
-        name: line.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/, '').replace(/(tapo|shelly|tasmota|sonoff)/gi, '').replace(/[,;\-\(\)]/g, ' ').replace(/\s+/g, ' ').trim() || 'Akıllı Cihaz',
+        name: line.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/, '').replace(/(tapo|shelly|tasmota|sonoff|xiaomi|tuya|smartlife|miji)/gi, '').replace(/[,;\-\(\)]/g, ' ').replace(/\s+/g, ' ').trim() || 'Akıllı Cihaz',
         type,
         room,
         isOnline: true,
@@ -1356,33 +1398,40 @@ app.post('/api/local-lan/import-text', async (req, res) => {
       
       Metinde geçen IP adreslerini (örn: 192.168.1.200) doğru bir şekilde tespit edip "ipAddress" alanına ata.
       Her cihaz için oda ismini ("room") türkçe olarak belirle (örn: 'Salon', 'Mutfak', 'Yatak Odası', 'Koridor', 'Banyo', 'Bahçe'). Eğer bulunamazsa 'Salon' yap.
-      Markaları (Tapo, Shelly, Tasmota, Sonoff vb.) ve modelleri algıla.
-      
-      Cevap formatın sadece şu şemada JSON olmalıdır:
-      {
-        "devices": [
-          {
-            "name": "Cihazın Adı (örn: Mutfak Lambası, Akıllı Priz)",
-            "type": "Yukarıda belirtilen geçerli türlerden biri",
-            "room": "Belirlenen oda ismi",
-            "ipAddress": "Varsa IP adresi (örn: 192.168.1.100)",
-            "brand": "Varsa markası (örn: Tapo, Shelly, Tasmota, Sonoff vb.)",
-            "model": "Varsa modeli"
-          }
-        ]
-      }
+      Markaları (Tapo, Xiaomi, Tuya, Shelly, Tasmota, Sonoff vb.) ve modelleri algıla.
     `;
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.5-flash',
       contents: prompt,
       config: {
-        responseMimeType: 'application/json'
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            devices: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  type: { type: Type.STRING },
+                  room: { type: Type.STRING },
+                  ipAddress: { type: Type.STRING },
+                  brand: { type: Type.STRING },
+                  model: { type: Type.STRING }
+                },
+                required: ["name", "type"]
+              }
+            }
+          },
+          required: ["devices"]
+        }
       }
     });
 
     const textResult = response.text || '{"devices":[]}';
-    const parsed = JSON.parse(cleanJsonString(textResult));
+    const parsed = JSON.parse(textResult);
     const rawList = parsed.devices || [];
 
     rawList.forEach((rawDev: any, idx: number) => {

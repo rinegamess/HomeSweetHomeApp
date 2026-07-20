@@ -1,18 +1,13 @@
 import { useState, useEffect, FormEvent } from 'react';
-import { ToggleLeft, ToggleRight, Radio, Shield, Settings, Sparkles, Key, CloudLightning, RefreshCw, Volume2, BellRing, Save, HelpCircle } from 'lucide-react';
-import { PlatformConnection } from '../types';
+import { ToggleLeft, ToggleRight, Shield, Settings, Sparkles, Key, CloudLightning, RefreshCw, Volume2, BellRing, Save, HelpCircle } from 'lucide-react';
 import { Language, translations } from '../lib/translations';
 
 interface SettingsViewProps {
   language: Language;
-  platforms: PlatformConnection[];
-  onTogglePlatform: (id: string) => void;
 }
 
 export default function SettingsView({
-  language,
-  platforms,
-  onTogglePlatform
+  language
 }: SettingsViewProps) {
   const t = translations[language];
 
@@ -67,11 +62,6 @@ export default function SettingsView({
       if (data.success) {
         setImportStatus(data.log || (language === 'tr' ? 'Cihazlarınız başarıyla aktarıldı!' : 'Devices successfully imported!'));
         setImportText('');
-        const platform = platforms.find(p => p.type === 'local');
-        if (platform) {
-          platform.connected = true;
-          platform.deviceCount = (platform.deviceCount || 0) + data.importedCount;
-        }
       } else {
         setImportStatus(`Hata: ${data.error}`);
       }
@@ -141,53 +131,6 @@ export default function SettingsView({
       {/* LEFT COLUMN: Integrations & Connections */}
       <div className="lg:col-span-8 space-y-6">
         
-        {/* Platforms List */}
-        <div className="p-6 rounded-3xl bg-white dark:bg-polish-dark-card border border-slate-200/60 dark:border-slate-800/80 shadow-xs">
-          <div className="flex items-center gap-2.5 mb-5">
-            <Radio className="w-5.5 h-5.5 text-indigo-500 animate-pulse shrink-0" />
-            <h3 className="text-sm font-bold font-display text-slate-800 dark:text-slate-100">
-              {t.connections}
-            </h3>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {platforms.map(platform => (
-              <div
-                key={platform.id}
-                className={`p-4 rounded-2xl border transition-all flex items-center justify-between ${
-                  platform.connected
-                    ? 'bg-white dark:bg-polish-dark-card border-emerald-200/50 dark:border-emerald-950/45 shadow-xs'
-                    : 'bg-slate-50/50 dark:bg-polish-dark-header border-slate-200/50 dark:border-slate-800/50 opacity-60'
-                }`}
-              >
-                <div>
-                  <h4 className="text-xs font-bold font-display text-slate-800 dark:text-slate-100 leading-none">
-                    {platform.name}
-                  </h4>
-                  <div className="flex items-center gap-2 mt-2">
-                    <span className={`w-2 h-2 rounded-full ${platform.connected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></span>
-                    <span className="text-[10px] text-slate-400">
-                      {platform.connected ? `${platform.deviceCount} ${language === 'tr' ? 'cihaz senkronize' : 'devices synced'}` : t.disconnected}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Connection switch */}
-                <button
-                  onClick={() => onTogglePlatform(platform.id)}
-                  className="cursor-pointer"
-                >
-                  {platform.connected ? (
-                    <ToggleRight className="w-9 h-9 text-emerald-500" />
-                  ) : (
-                    <ToggleLeft className="w-9 h-9 text-slate-400" />
-                  )}
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-
         {/* Local Network & IP-Based Integration Details Card */}
         <div className="p-6 rounded-3xl bg-white dark:bg-polish-dark-card border border-slate-200/60 dark:border-slate-800/80 shadow-xs space-y-4">
           <div className="flex items-center justify-between">
