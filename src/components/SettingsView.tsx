@@ -250,7 +250,7 @@ export default function SettingsView({
             <div className="sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-2">
               <div className="flex items-center gap-1 text-[10px] text-slate-400">
                 <HelpCircle className="w-3.5 h-3.5 text-slate-400" />
-                <span>{language === 'tr' ? 'Tapo yerel prizleri kontrol etmek için mobil uygulama kullanıcı adı ve şifrenizi girin.' : 'Enter your Tapo App credentials to authorize direct IP switch controls.'}</span>
+                <span>{language === 'tr' ? 'Tapo cihazları otomatik buluttan çekmek ve yerel/bulut olarak kontrol etmek için e-posta ve şifrenizi girin.' : 'Enter your Tapo credentials to automatically fetch cloud devices and control them locally/via cloud.'}</span>
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -271,7 +271,7 @@ export default function SettingsView({
                   ) : (
                     <RefreshCw className="w-3.5 h-3.5" />
                   )}
-                  {language === 'tr' ? 'Ağdaki Durumları Tara' : 'Scan Network Status'}
+                  {language === 'tr' ? 'Ağı Tara & Tapo Cihazlarını Eşitle' : 'Scan Network & Sync Tapo Devices'}
                 </button>
               </div>
             </div>

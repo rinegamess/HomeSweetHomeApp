@@ -9,7 +9,7 @@ import { Device, KitchenItem, Automation, NotificationItem, PlatformConnection, 
 dotenv.config();
 
 // Local Area Network (LAN) Direct Integrations (Tapo, Shelly, Tasmota, and REST)
-import { loginDeviceByIp } from 'tp-link-tapo-connect';
+import { loginDeviceByIp, cloudLogin } from 'tp-link-tapo-connect';
 import net from 'net';
 
 let googleHomeConfig = {
@@ -26,6 +26,19 @@ let localConfig = {
   pingTimeoutMs: 1000,
   connected: true
 };
+
+// Robust JSON sanitization helper to fix AI response formatting issues
+function cleanJsonString(str: string): string {
+  let cleaned = str.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?/i, '');
+    cleaned = cleaned.replace(/```$/, '');
+    cleaned = cleaned.trim();
+  }
+  // Strip trailing commas before closing braces/brackets
+  cleaned = cleaned.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']');
+  return cleaned;
+}
 
 // Direct socket verification for smart devices on LAN (Presence detection)
 async function checkTcpPort(ip: string, port: number, timeout: number = 800): Promise<boolean> {
@@ -287,31 +300,71 @@ app.post('/api/devices/toggle', async (req, res) => {
     device.isOn = !device.isOn;
     device.lastActive = 'Şimdi';
 
-    if (device.ipAddress) {
-      const ip = device.ipAddress;
-      const brandLower = device.brand ? device.brand.toLowerCase() : '';
-      console.log(`[LAN Control] Toggling physical device ${device.name} at IP ${ip} (Brand: ${device.brand || 'REST'}) to ${device.isOn ? 'ON' : 'OFF'}`);
+    const ip = device.ipAddress;
+    const brandLower = device.brand ? device.brand.toLowerCase() : '';
+    const hasTapoCredentials = !!(localConfig.tapoEmail && localConfig.tapoPassword);
+
+    if (ip || (brandLower === 'tapo' && hasTapoCredentials)) {
+      console.log(`[LAN/Cloud Control] Toggling physical device ${device.name} (Brand: ${device.brand || 'REST'}) to ${device.isOn ? 'ON' : 'OFF'}`);
       
       try {
         if (brandLower === 'tapo') {
-          if (localConfig.tapoEmail && localConfig.tapoPassword) {
-            try {
-              const session = await loginDeviceByIp(localConfig.tapoEmail, localConfig.tapoPassword, ip);
-              if (device.isOn) {
-                await session.turnOn();
-              } else {
-                await session.turnOff();
+          if (hasTapoCredentials) {
+            let controlled = false;
+            // 1. Try local IP control first if we have an IP
+            if (ip) {
+              try {
+                console.log(`[LAN Tapo] Attempting local IP control at ${ip}...`);
+                const session = await loginDeviceByIp(localConfig.tapoEmail, localConfig.tapoPassword, ip);
+                if (device.isOn) {
+                  await session.turnOn();
+                } else {
+                  await session.turnOff();
+                }
+                device.lastActive = 'Şimdi (Tapo Yerel)';
+                controlled = true;
+                console.log(`[LAN Tapo] Successfully controlled Tapo locally at ${ip}`);
+              } catch (err: any) {
+                console.warn(`[LAN Tapo Control Warning] Local IP control failed: ${err.message}. Trying Cloud fallback...`);
               }
-              device.lastActive = 'Şimdi (Tapo Yerel)';
-              console.log(`[LAN Tapo] Successfully controlled Tapo at ${ip}`);
-            } catch (err: any) {
-              console.warn(`[LAN Tapo Control Warning] Network unreachable (expected if in cloud sandbox): ${err.message}`);
-              device.lastActive = 'Şimdi (Yerel Başarısız - Sanal Değişti)';
+            }
+            
+            // 2. Try cloud control fallback if not controlled locally
+            if (!controlled) {
+              try {
+                console.log(`[Cloud Tapo] Attempting cloud control fallback for device ${device.name}...`);
+                const cloud = await cloudLogin(localConfig.tapoEmail, localConfig.tapoPassword);
+                const cloudDevices = await cloud.listDevices();
+                
+                // Find device by deviceId or name
+                const targetId = device.id.startsWith('tapo-') ? device.id.slice(5) : device.id;
+                const cloudDev = cloudDevices.find((cd: any) => cd.deviceId === targetId || cd.alias === device.name);
+                
+                if (cloudDev) {
+                  const devHandler = cloud.getTapoDevice(cloudDev);
+                  if (device.isOn) {
+                    await devHandler.turnOn();
+                  } else {
+                    await devHandler.turnOff();
+                  }
+                  device.lastActive = 'Şimdi (Tapo Bulut)';
+                  controlled = true;
+                  console.log(`[Cloud Tapo] Successfully controlled Tapo via Cloud`);
+                } else {
+                  console.warn(`[Cloud Tapo] Device with ID "${targetId}" or name "${device.name}" not found in cloud list.`);
+                }
+              } catch (err: any) {
+                console.error('[Cloud Tapo Fallback Error]:', err.message);
+              }
+            }
+            
+            if (!controlled) {
+              device.lastActive = 'Şimdi (Yerel/Bulut Başarısız - Sanal Değişti)';
             }
           } else {
             device.lastActive = 'Şimdi (Tapo Şifresi Yok)';
           }
-        } else if (brandLower === 'shelly') {
+        } else if (brandLower === 'shelly' && ip) {
           const onStr = device.isOn ? 'on' : 'off';
           const onBool = device.isOn;
           try {
@@ -1137,8 +1190,83 @@ app.post('/api/local-lan/config', (req, res) => {
 });
 
 app.post('/api/local-lan/scan', async (req, res) => {
-  const result = await runLocalPresenceCheck();
-  res.json(result);
+  const presenceResult = await runLocalPresenceCheck();
+  let cloudLog = '';
+  
+  if (localConfig.tapoEmail && localConfig.tapoPassword) {
+    try {
+      console.log(`[Tapo Cloud Sync] Logging in for ${localConfig.tapoEmail}...`);
+      const cloud = await cloudLogin(localConfig.tapoEmail, localConfig.tapoPassword);
+      const cloudDevices = await cloud.listDevices();
+      console.log(`[Tapo Cloud Sync] Found ${cloudDevices.length} devices in Tapo cloud.`);
+      
+      let newCount = 0;
+      let updatedCount = 0;
+      
+      for (const cd of cloudDevices) {
+        const id = `tapo-${cd.deviceId}`;
+        let existing = devices.find(d => d.id === id || (d.brand === 'Tapo' && d.name === cd.alias));
+        
+        let type: DeviceType = 'socket';
+        const modelLower = (cd.deviceModel || '').toLowerCase();
+        const typeLower = (cd.deviceType || '').toLowerCase();
+        if (modelLower.startsWith('l') || typeLower.includes('bulb') || typeLower.includes('light')) {
+          type = 'bulb';
+        } else if (modelLower.startsWith('p') || typeLower.includes('plug') || typeLower.includes('switch')) {
+          type = 'socket';
+        } else if (typeLower.includes('camera')) {
+          type = 'camera';
+        } else if (typeLower.includes('hub')) {
+          type = 'speaker';
+        }
+        
+        const ipAddress = cd.ip || undefined;
+        
+        if (existing) {
+          existing.id = id; // Ensure consistent ID
+          if (ipAddress && !existing.ipAddress) {
+            existing.ipAddress = ipAddress;
+          }
+          existing.brand = 'Tapo';
+          existing.model = cd.deviceModel;
+          existing.isOnline = cd.status === 1;
+          updatedCount++;
+        } else {
+          devices.push({
+            id,
+            name: cd.alias || cd.deviceName || 'Tapo Cihazı',
+            type,
+            room: 'Salon',
+            isOnline: cd.status === 1,
+            isOn: cd.status === 1, // Default state
+            lastActive: 'Tapo Buluttan Senkronize Edildi',
+            automationEnabled: false,
+            brand: 'Tapo',
+            model: cd.deviceModel,
+            ipAddress: ipAddress
+          });
+          newCount++;
+        }
+      }
+      
+      if (newCount > 0 || updatedCount > 0) {
+        saveState();
+      }
+      
+      cloudLog = `Tapo Bulut hesabınızdan ${cloudDevices.length} cihaz tespit edildi (${newCount} yeni cihaz eklendi, ${updatedCount} cihaz güncellendi).`;
+    } catch (err: any) {
+      console.error('[Tapo Cloud Sync Error]:', err);
+      cloudLog = `Tapo Bulut eşitleme hatası: ${err.message || err}`;
+    }
+  } else {
+    cloudLog = 'Tapo e-posta ve şifreniz girilmediği için bulut senkronizasyonu atlandı.';
+  }
+  
+  res.json({
+    success: true,
+    deviceCount: presenceResult.deviceCount,
+    log: `${presenceResult.log}\n\n[Tapo Bulut]: ${cloudLog}`
+  });
 });
 
 // Free/Smart Text-based Import for Local LAN IP-based devices!
@@ -1219,7 +1347,7 @@ app.post('/api/local-lan/import-text', async (req, res) => {
   try {
     const prompt = `
       Sen akıllı ev asistanı entegrasyon arayüzüsün. Kullanıcı yerel ağındaki (LAN) akıllı cihazların listesini, IP adreslerini veya el yazısı metnini gönderdi.
-      Kullanıcı metni: "${text}"
+      Kullanıcı metni: ${JSON.stringify(text)}
       
       Görevin:
       Bu metindeki tüm akıllı ev cihazlarını tespit et. Her birini geçerli birer "Device" nesnesi olarak ayrıştır.
@@ -1254,7 +1382,7 @@ app.post('/api/local-lan/import-text', async (req, res) => {
     });
 
     const textResult = response.text || '{"devices":[]}';
-    const parsed = JSON.parse(textResult.trim());
+    const parsed = JSON.parse(cleanJsonString(textResult));
     const rawList = parsed.devices || [];
 
     rawList.forEach((rawDev: any, idx: number) => {
@@ -1324,7 +1452,7 @@ app.post('/api/local-lan/command', async (req, res) => {
     const prompt = `
       Sen Yerel Ağ Akıllı Ev Asistanı'sın. Kullanıcı yerel ağındaki (LAN) akıllı cihazları senin üzerinden kontrol ediyor.
       Şu anda kullanıcının evindeki cihazlar: ${JSON.stringify(devices, null, 2)}.
-      Kullanıcının gönderdiği komut: "${command}".
+      Kullanıcının gönderdiği komut: ${JSON.stringify(command)}.
       Dil: ${currentLanguage === 'tr' ? 'Türkçe' : 'İngilizce'}.
       
       Eğer komut bir cihazı açma, kapatma veya değer ayarlamaya yönelikse bunu anla ve JSON olarak çıktı ver.
@@ -1346,7 +1474,7 @@ app.post('/api/local-lan/command', async (req, res) => {
     });
     
     const text = response.text || '{}';
-    const parsed = JSON.parse(text);
+    const parsed = JSON.parse(cleanJsonString(text));
     
     if (parsed.deviceUpdates && Array.isArray(parsed.deviceUpdates)) {
       parsed.deviceUpdates.forEach((up: any) => {
