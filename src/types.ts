@@ -38,6 +38,9 @@ export interface Device {
   ipAddress?: string; // e.g. "192.168.1.45"
   brand?: string;     // e.g. "Tapo", "Tuya"
   model?: string;     // e.g. "P100"
+  temperature?: number; // temperature read from air purifiers/sensors
+  humidity?: number;    // humidity read from air purifiers/sensors
+  airQualityIndex?: number; // AQI/PM2.5 value for air purifiers
 }
 
 export type KitchenCategory =

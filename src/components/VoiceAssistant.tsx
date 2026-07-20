@@ -37,7 +37,14 @@ export default function VoiceAssistant({
   const [textInput, setTextInput] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [isWakeWordDetected, setIsWakeWordDetected] = useState(false);
-  const [isTtsEnabled, setIsTtsEnabled] = useState(true);
+  const [isTtsEnabled, setIsTtsEnabled] = useState(() => {
+    const saved = localStorage.getItem('soundNotif');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('soundNotif', String(isTtsEnabled));
+  }, [isTtsEnabled]);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
 

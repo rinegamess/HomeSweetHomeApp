@@ -566,8 +566,8 @@ export default function DevicesView({
                   )}
                 </div>
 
-                {/* Battery & Energy Stats */}
-                <div className="flex items-center gap-4 mt-4 font-sans text-[10px] text-slate-400">
+                {/* Battery, Energy, Temperature, Humidity & Air Quality Stats */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-4 font-sans text-[10px] text-slate-400">
                   {device.batteryLevel !== undefined && (
                     <div className="flex items-center gap-1">
                       <Battery className="w-3.5 h-3.5 text-emerald-500" />
@@ -578,6 +578,24 @@ export default function DevicesView({
                     <div className="flex items-center gap-1">
                       <Zap className="w-3.5 h-3.5 text-amber-500" />
                       <span>{device.energyConsumption} kWh</span>
+                    </div>
+                  )}
+                  {device.temperature !== undefined && (
+                    <div className="flex items-center gap-1">
+                      <Thermometer className="w-3.5 h-3.5 text-orange-500" />
+                      <span>{device.temperature}°C</span>
+                    </div>
+                  )}
+                  {device.humidity !== undefined && (
+                    <div className="flex items-center gap-1">
+                      <Droplets className="w-3.5 h-3.5 text-blue-500" />
+                      <span>{device.humidity}%</span>
+                    </div>
+                  )}
+                  {device.airQualityIndex !== undefined && (
+                    <div className="flex items-center gap-1">
+                      <Wind className="w-3.5 h-3.5 text-emerald-500" />
+                      <span>AQI {device.airQualityIndex}</span>
                     </div>
                   )}
                   <div className="flex items-center gap-1 ml-auto">

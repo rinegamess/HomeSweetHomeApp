@@ -4,12 +4,9 @@ import { translations, Language } from './lib/translations';
 import { Device, KitchenItem, Automation, NotificationItem, PlatformConnection, RoomType, CustomRoom } from './types';
 
 const DEFAULT_ROOMS: CustomRoom[] = [
-  { name: 'Salon', bg: 'indigo', icon: 'Sofa' },
+  { name: 'Oturma Odası', bg: 'indigo', icon: 'Sofa' },
   { name: 'Mutfak', bg: 'amber', icon: 'ChefHat' },
-  { name: 'Yatak Odası', bg: 'purple', icon: 'Bed' },
-  { name: 'Koridor', bg: 'sky', icon: 'Home' },
-  { name: 'Banyo', bg: 'emerald', icon: 'Bath' },
-  { name: 'Bahçe', bg: 'teal', icon: 'Trees' },
+  { name: 'Çalışma Odası', bg: 'purple', icon: 'Home' },
 ];
 
 // Modular view components
@@ -43,7 +40,13 @@ export default function App() {
     const saved = localStorage.getItem('smarthome_rooms_list');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        // If the rooms list is the old verbose one (more than 3 rooms or doesn't match simplified requirements), reset it!
+        if (parsed.length > 3 || !parsed.some((r: any) => r.name === 'Çalışma Odası')) {
+          localStorage.setItem('smarthome_rooms_list', JSON.stringify(DEFAULT_ROOMS));
+          return DEFAULT_ROOMS;
+        }
+        return parsed;
       } catch (e) {
         console.error('Error parsing custom rooms:', e);
       }
